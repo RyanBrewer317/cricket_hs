@@ -69,17 +69,17 @@ whitespace0 = many0 $ oneOf [char ' ', char '\n']
 whitespace :: Parser [Char]
 whitespace = many $ oneOf [char ' ', char '\n']
 
-parseLambda :: Parser Syntax
-parseLambda = do
-  _ <- char '\\'
-  _ <- whitespace0
-  LambdaSyntax <$> (identString <* whitespace0 <* char '.') <*> parseTerm
-
 identString :: Parser String
 identString = many $ oneOf [lowercase, char '_']
 
-parseIdent :: Parser Syntax
-parseIdent = IdentSyntax <$> identString
+parseIdentOrLambda :: Parser Syntax
+parseIdentOrLambda = do
+  i <- identString
+  _ <- whitespace0
+  mb_arrow <- possible (exact "->")
+  case mb_arrow of
+    Just _ -> LambdaSyntax i <$> parseTerm
+    Nothing -> return $ IdentSyntax i
 
 parseInt :: Parser Syntax
 parseInt = possible (char '-') >>= \case
@@ -103,7 +103,6 @@ parseLet = do
   _ <- exact "in"
   _ <- whitespace
   LetSyntax forced ident val <$> parseTerm
-      
 
 parseParens :: Parser Syntax
 parseParens = char '(' *> parseTerm <* char ')'
@@ -111,7 +110,7 @@ parseParens = char '(' *> parseTerm <* char ')'
 parseTermNoApp :: Parser Syntax
 parseTermNoApp = do
   _ <- whitespace0
-  t <- oneOf [parseParens, parseInt, parseLet, parseIdent, parseLambda]
+  t <- oneOf [parseParens, parseInt, parseLet, parseIdentOrLambda]
   _ <- whitespace0
   return t
 
@@ -216,7 +215,7 @@ normalize t = go t (Stack []) (Env []) >>= \(out, _, _) -> return out
 main :: IO ()
 main = do
   code <- getLine
-  case run parseLet code of
+  case run parseTerm code of
     Left err -> putStrLn err
     Right (t, "") ->
       case debruijn t of
