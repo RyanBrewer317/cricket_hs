@@ -59,15 +59,21 @@ many p = Parser $ \s -> do -- Either monad, not Parser monad
   (x, rest) <- run p s
   run ((x:) <$> many0 p) rest
 
+exact :: String -> Parser ()
+exact s = foldr (\c p-> char c *> p) (return ()) s $> ()
+
 -- | Note that this reverses the list of characters, for performance.
+whitespace0 :: Parser [Char]
+whitespace0 = many0 $ oneOf [char ' ', char '\n']
+
 whitespace :: Parser [Char]
-whitespace = many0 $ oneOf [char ' ', char '\n']
+whitespace = many $ oneOf [char ' ', char '\n']
 
 parseLambda :: Parser Syntax
 parseLambda = do
   _ <- char '\\'
-  _ <- whitespace
-  LambdaSyntax <$> (identString <* whitespace <* char '.') <*> parseTerm
+  _ <- whitespace0
+  LambdaSyntax <$> (identString <* whitespace0 <* char '.') <*> parseTerm
 
 identString :: Parser String
 identString = many $ oneOf [lowercase, char '_']
@@ -80,34 +86,50 @@ parseInt = possible (char '-') >>= \case
   Just _ -> IntSyntax . negate <$> int
   Nothing -> IntSyntax <$> int
 
-parseBuiltin :: Parser Syntax
-parseBuiltin = BuiltinSyntax <$> (char '$' *> identString)
+parseLet :: Parser Syntax
+parseLet = do
+  _ <- exact "let"
+  _ <- whitespace
+  w <- identString
+  _ <- whitespace0
+  (ident, forced) <- case w of
+    "force" -> do
+      i <- identString
+      return (i, True)
+    i -> return (i, False)
+  _ <- whitespace0
+  _ <- char '='
+  val <- parseTerm
+  _ <- exact "in"
+  _ <- whitespace
+  LetSyntax forced ident val <$> parseTerm
+      
 
 parseParens :: Parser Syntax
 parseParens = char '(' *> parseTerm <* char ')'
 
 parseTermNoApp :: Parser Syntax
 parseTermNoApp = do
-  _ <- whitespace
-  t <- oneOf [parseParens, parseBuiltin, parseInt, parseIdent, parseLambda]
-  _ <- whitespace
+  _ <- whitespace0
+  t <- oneOf [parseParens, parseInt, parseLet, parseIdent, parseLambda]
+  _ <- whitespace0
   return t
 
 parseTerm :: Parser Syntax
 parseTerm = do
   t <- parseTermNoApp
-  args <- many0 parseTermNoApp
+  args <- many0 parseParens
   let out = case args of
         [] -> t
         _ -> foldl' AppSyntax t args
-  _ <- whitespace
+  _ <- whitespace0
   return out
 
 data Syntax = LambdaSyntax String Syntax
             | IdentSyntax String
             | AppSyntax Syntax Syntax
             | IntSyntax Int
-            | BuiltinSyntax String
+            | LetSyntax Bool String Syntax Syntax
             deriving Show
 
 debruijn :: Syntax -> Either String Term
@@ -119,16 +141,21 @@ debruijn = go 0 Map.empty
       IdentSyntax name ->
         case Map.lookup name renames of
           Just i -> Right $ Ident (index - i - 1)
-          Nothing -> Left $ "unknown identifier `" ++ name ++ "`"
+          Nothing -> Right $ Builtin name
       AppSyntax foo bar -> App <$> go index renames foo <*> go index renames bar
       IntSyntax i -> Right $ Int i
-      BuiltinSyntax name -> Right $ Builtin name
+      LetSyntax True ident val scope -> do
+        val2 <- go (index + 1) (Map.insert ident index renames) val
+        scope2 <- go index renames scope
+        return $ LetForce val2 scope2
+      LetSyntax False ident val scope -> go index renames $ AppSyntax (LambdaSyntax ident scope) val
 
 data Term = Lambda Term
           | Ident Int
           | App Term Term
           | Int Int
           | Builtin String
+          | LetForce Term Term
 
 class Pretty a where
   pretty :: a -> String
@@ -139,6 +166,7 @@ instance Pretty Term where
   pretty (App foo bar) = "(" ++ pretty foo ++ ")(" ++ pretty bar ++ ")"
   pretty (Int i) = show i
   pretty (Builtin name) = '$':name
+  pretty (LetForce val scope) = "push " ++ pretty val ++ " in " ++ pretty scope
 
 newtype Env = Env [(Term, Env)]
 
@@ -180,18 +208,15 @@ normalize t = go t (Stack []) (Env []) >>= \(out, _, _) -> return out
               putStrLn $ pretty normal_form
               return (Int 0, Stack [], e)
             _ -> error $ "`$print` with wrong number of arguments: " ++ show (length stack)
-        Builtin "seq" -> 
-          case stack of
-            [(arg1, arg1_env), (arg2, arg2_env)] -> do
-              (normal_form, _, _) <- go arg1 (Stack []) arg1_env
-              go arg2 (Stack [(normal_form, Env [])]) arg2_env
-            _ -> error "`$seq` with wrong number of arguments"
         Builtin name -> error $ "unknown builtin `$" ++ name ++ "`"
+        LetForce val scope -> do
+          (normal_form, _, _) <- go val (Stack []) e
+          go scope s (Env $ (normal_form, e):env)
 
 main :: IO ()
 main = do
   code <- getLine
-  case run parseTerm code of
+  case run parseLet code of
     Left err -> putStrLn err
     Right (t, "") ->
       case debruijn t of
