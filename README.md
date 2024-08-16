@@ -98,9 +98,47 @@ which is mathematically due to the nice relationship between negative types (obj
 
 [^1]: This is another reason `let force` is a great fit for Cricket: situations where you don't want an object field to get re-evaluated every time its accessed!
 
+Here's an iterator in Cricket. I'm still thinking about how I'd make this nicer.
+```
+let iter = {
+   this.go: start->step->{
+      t.val: start,
+      t.next: this.go(step(start))(step)
+   }
+} in
+print(iter.go(7)(n->n-1).next.next.val)
+```
+outputs:
+```
+5
+```
+
+Cricket has a syntax sugar for passing objects to functions, so multi-parameter functions with labels can be simulated this way:
+```
+let iter = {
+   this.go: args->{
+      t.val: args.start,
+      t.next: this.go{_.start: step(args.start), _.step: args.step}
+   }
+} in
+print(iter.go(_.start: 7, _step: n->n-1).next.next.val)
+```
+There are certainly situations where this helps readability, and maybe even performance but don't quote me on that.
+
 ### Plans
 
 There are bugs around the inherent recursion of these lazy objects (consider `{this.x: this.x}`), and fixing them is my top priority right now.
+The only demos above that don't work involve the `input` builtin function; 
+I want to switch to an object-based I/O interface, like `console.write` and `console.read`.
+I need more than just stdio I/O stuff too, like file IO and networking.
+As an embeddable language, great FFI with C is a must.
+I also need to add booleans, floats, and strings at the very least.
+And `let rec` for recursive bindings.
+Booleans (ie `if`/`else`) and recursive bindings would improve things quite a bit, I think.
+Nice syntax for lambda methods (like `{this.f(x): ...}` instead of `{this.f: x->...}` could be good.
+And for let bindings too, like `let f(x) = ... in ...`.
+We need a better way of doing global definitions, too, like `def f(x) ...`.
+I really like back-passing sugar, so it'd be nice to have that too, like `let x <- f in ...` for `f(x -> ...)`.
 Then there's improving the laughable error messages and parsing.
 
 There's certainly a pain point of not having sum-of-products ADTs, for making certain states unrepresentable.
@@ -112,6 +150,8 @@ Finally, in a more boring and potentially tedious way, sum types could just be f
 I can imagine sugaring that or something, we'll see.
 
 Finally, I want to port the codebase to C, using reference counting. 
+It's worth thinking about how reference counting would interact with C FFI; I've heard bad things about Python in this regard.
+Perhaps another memory management technique would be better, but I need to think of it!
 The stacks used by the Krivine machine benefit enormously in time-complexity by being immutable (namely, there's O(1) copying).
 So the C port would likely keep a lot of the implementation details of the Haskell original, though eagerly evaluated of course.
-The main benefits include a more familiar-looking implementation, potential performance improvements, and a smaller dev environment and program binary.
+The main benefits of the C port are a more familiar-looking implementation, potential performance improvements, and a smaller dev environment and program binary.
