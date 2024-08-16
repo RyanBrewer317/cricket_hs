@@ -18,4 +18,4 @@ A huge drive for this project is how small it is, implementation-wise, and I wan
 Using a Krivine machine means the laziness isn't coming from Haskell's laziness, and I can pull off a decent C port.
 All I need to figure out then is memory reclamation, which will probably be reference counting.
 
-![image](https://github.com/user-attachments/assets/6defb5cd-c284-4e09-b947-1ed167c85a8d)
+![image](https://github.com/user-attachments/assets/2b21894d-eee1-43b7-b520-8dca372c23c1)
