@@ -2,8 +2,8 @@
 module Main where
 import Data.Char (ord)
 import qualified Data.Map as Map
-import qualified Debug.Trace as Debug
 import Data.Foldable (foldl')
+import Data.Functor (($>))
 
 newtype Parser a = Parser { run :: String -> Either String (a, String) }
 
@@ -49,25 +49,19 @@ oneOf [] = error "oneOf on empty list of parsers"
 possible :: Parser a -> Parser (Maybe a)
 possible p = oneOf [fmap Just p, return Nothing]
 
-anyRev :: Parser a -> Parser [a]
-anyRev p = Parser $ \s -> case run p s of
+many0 :: Parser a -> Parser [a]
+many0 p = Parser $ \s -> case run p s of
   Left _ -> Right ([], s)
-  Right (x, rest) -> run ((x:) <$> anyRev p) rest
-
-any :: Parser a -> Parser [a]
-any = fmap reverse . anyRev
-
-manyRev :: Parser a -> Parser [a]
-manyRev p = Parser $ \s -> do -- Either monad, not Parser monad
-  (x, rest) <- run p s
-  run ((x:) <$> anyRev p) rest
+  Right (x, rest) -> run ((x:) <$> many0 p) rest
 
 many :: Parser a -> Parser [a]
-many = fmap reverse . manyRev
+many p = Parser $ \s -> do -- Either monad, not Parser monad
+  (x, rest) <- run p s
+  run ((x:) <$> many0 p) rest
 
 -- | Note that this reverses the list of characters, for performance.
 whitespace :: Parser [Char]
-whitespace = anyRev $ oneOf [char ' ', char '\n']
+whitespace = many0 $ oneOf [char ' ', char '\n']
 
 parseLambda :: Parser Syntax
 parseLambda = do
@@ -86,20 +80,23 @@ parseInt = possible (char '-') >>= \case
   Just _ -> IntSyntax . negate <$> int
   Nothing -> IntSyntax <$> int
 
+parseBuiltin :: Parser Syntax
+parseBuiltin = BuiltinSyntax <$> (char '$' *> identString)
+
 parseParens :: Parser Syntax
 parseParens = char '(' *> parseTerm <* char ')'
 
 parseTermNoApp :: Parser Syntax
 parseTermNoApp = do
   _ <- whitespace
-  t <- oneOf [parseParens, parseInt, parseIdent, parseLambda]
+  t <- oneOf [parseParens, parseBuiltin, parseInt, parseIdent, parseLambda]
   _ <- whitespace
   return t
 
 parseTerm :: Parser Syntax
 parseTerm = do
   t <- parseTermNoApp
-  args <- anyRev parseTermNoApp
+  args <- many0 parseTermNoApp
   let out = case args of
         [] -> t
         _ -> foldl' AppSyntax t args
@@ -110,6 +107,7 @@ data Syntax = LambdaSyntax String Syntax
             | IdentSyntax String
             | AppSyntax Syntax Syntax
             | IntSyntax Int
+            | BuiltinSyntax String
             deriving Show
 
 debruijn :: Syntax -> Either String Term
@@ -118,17 +116,19 @@ debruijn = go 0 Map.empty
     go :: Int -> Map.Map String Int -> Syntax -> Either String Term
     go index renames t = case t of
       LambdaSyntax param body -> Lambda <$> go (index + 1) (Map.insert param index renames) body
-      IdentSyntax name -> 
+      IdentSyntax name ->
         case Map.lookup name renames of
           Just i -> Right $ Ident (index - i - 1)
           Nothing -> Left $ "unknown identifier `" ++ name ++ "`"
       AppSyntax foo bar -> App <$> go index renames foo <*> go index renames bar
       IntSyntax i -> Right $ Int i
+      BuiltinSyntax name -> Right $ Builtin name
 
 data Term = Lambda Term
           | Ident Int
           | App Term Term
           | Int Int
+          | Builtin String
 
 class Pretty a where
   pretty :: a -> String
@@ -138,6 +138,7 @@ instance Pretty Term where
   pretty (Ident i) = "'" ++ show i
   pretty (App foo bar) = "(" ++ pretty foo ++ ")(" ++ pretty bar ++ ")"
   pretty (Int i) = show i
+  pretty (Builtin name) = '$':name
 
 newtype Env = Env [(Term, Env)]
 
@@ -151,16 +152,16 @@ newtype Stack = Stack [(Term, Env)]
 instance Pretty Stack where
   pretty (Stack l) = pretty (Env l)
 
-normalize :: Term -> Term
-normalize t = let (out, _, _) = go t (Stack []) (Env []) in out
+normalize :: Term -> IO Term
+normalize t = go t (Stack []) (Env []) >>= \(out, _, _) -> return out
   where
-    go term s@(Stack stack) e@(Env env) = 
-      Debug.trace (pretty term ++ " ; " ++ pretty s ++ "; " ++ pretty e ++ ".") $
+    go term s@(Stack stack) e@(Env env) = do
+      -- putStrLn $ pretty term ++ " ; " ++ pretty s ++ "; " ++ pretty e ++ "."
       case term of
         Lambda body ->
           case stack of
             arg:rest -> go body (Stack rest) (Env (arg:env))
-            [] -> (term, s, e)
+            [] -> return (term, s, e)
         Ident 0 ->
           case env of
             (def, new_env):_ -> go def s new_env
@@ -168,18 +169,32 @@ normalize t = let (out, _, _) = go t (Stack []) (Env []) in out
         Ident n -> go (Ident $ n - 1) s (Env $ tail env)
         App foo bar ->
           go foo (Stack $ (bar, e):stack) e
-        Int _ -> 
+        Int _ ->
           case stack of
-            [] -> (term, s, e)
+            [] -> return (term, s, e)
             _ -> error "cannot call an integer like a function"
+        Builtin "print" ->
+          case stack of
+            [(arg, arg_env)] -> do
+              (normal_form, _, _) <- go arg (Stack []) arg_env
+              putStrLn $ pretty normal_form
+              return (Int 0, Stack [], e)
+            _ -> error $ "`$print` with wrong number of arguments: " ++ show (length stack)
+        Builtin "seq" -> 
+          case stack of
+            [(arg1, arg1_env), (arg2, arg2_env)] -> do
+              (normal_form, _, _) <- go arg1 (Stack []) arg1_env
+              go arg2 (Stack [(normal_form, Env [])]) arg2_env
+            _ -> error "`$seq` with wrong number of arguments"
+        Builtin name -> error $ "unknown builtin `$" ++ name ++ "`"
 
 main :: IO ()
 main = do
-  let code = "(\\x. 1)((\\x. x x)(\\x. x x))"
+  code <- getLine
   case run parseTerm code of
     Left err -> putStrLn err
-    Right (t, "") -> 
+    Right (t, "") ->
       case debruijn t of
         Left err -> putStrLn err
-        Right t2 -> putStrLn $ pretty $ normalize t2
+        Right t2 -> normalize t2 $> ()
     Right (_, c:_) -> putStrLn $ "unexpected `" ++ c:"`"
