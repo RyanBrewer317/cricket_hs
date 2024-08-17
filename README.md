@@ -5,6 +5,8 @@ The goal is to minimize the implementation size so that the language is easy to 
 
 Cricket makes great use of objects, but it is primarily an impure lazy functional language.
 
+At the time of writing, every demo in this README works perfectly!
+
 ### Laziness
 
 ```
@@ -43,42 +45,38 @@ There are two major issues laziness faces when it comes to side effects:
 
 Cricket solves this with the `let force` construct, which evaluates its value whether or not its used later, immediately.
 ```
-let _ = print(1) in print(2)
-let force _ = print(1) in print(2)
+let _ = print(1) in print(2) // prints 2
 ```
-outputs:
 ```
-2
-1
-2
+let force _ = print(1) in print(2) // prints 1, then 2
 ```
 things going wrong:
 ```
-let x = input() in
-let y = input() in
+let x = input{} in
+let y = input{} in
 let force _ = print(y) in
 print(x)
 ```
 outputs:
 ```
-> hello
-hello
-> world
-world
+> 1
+1
+> 2
+2
 ```
 things going right:
 ```
-let force x = input() in
-let force y = input() in
+let force x = input{} in
+let force y = input{} in
 let force _ = print(y) in
 print(x)
 ```
 outputs:
 ```
-> hi
-> there
-there
-hi
+> 1
+> 2
+2
+1
 ```
 
 No monads required! This is much easier to wrap your head around.
@@ -99,6 +97,9 @@ which is mathematically due to the nice relationship between negative types (obj
 [^1]: This is another reason `let force` is a great fit for Cricket: situations where you don't want an object field to get re-evaluated every time its accessed!
 
 Object fields are written `x.y: z` or `y: z`, depending on if you want access to `x`, the current object, in `z`.
+This is a little like in Go, where methods are written `func (o Obj) method(args) ty { ... }`.
+That is, you get to choose the name of your `this`/`self` parameter. I often choose `this`.
+
 Here's an iterator in Cricket. 
 ```
 let iter = {
@@ -125,11 +126,12 @@ let iter = {
 print(iter.go{start: 7, step: n->n-1}.next.next.val)
 ```
 There are certainly situations where this helps readability, and maybe even performance but don't quote me on that.
+It can be painful too though:
+common higher-order functions like `curry` can't work because callers need to know the callee's parameter names.
+If you're doing lots of higher-order programming, stick to curried arguments.
 
 ### Plans
 
-There are bugs around the inherent recursion of these lazy objects (consider `{this.x: this.x}`), and fixing them is my top priority right now.
-The only demos above that don't work involve the `input` builtin function; 
 I want to switch to an object-based I/O interface, like `console.write` and `console.read`.
 I need more than just stdio I/O stuff too, like file IO and networking.
 As an embeddable language, great FFI with C is a must.
