@@ -1,0 +1,50 @@
+def infinite_recursion(_):
+  infinite_recursion{} 
+
+def omega(_):
+  (x -> x(x))(x -> x(x)) 
+
+def infinitely_recursive_object(_):
+  {this.x: this.x}.x 
+
+def laziness_example_one(_):
+  // print 1, then 2
+  (_ -> 
+    let force _ = console.write(1) in
+    console.write(2)
+  )(infinite_recursion{})
+
+def laziness_example_two(_):
+  // print 2
+  let _ = console.write(1) in
+  console.write(2)
+
+def laziness_example_three(_):
+  // print 1, then 2
+  let force _ = console.write(1) in
+  console.write(2)
+
+def laziness_example_four(_):
+  // demonstrating how laziness causes problems
+  // this function echoes twice, 
+  // instead of two prompts and then printing in reverse
+  let x = console.read{} in
+  let y = console.read{} in
+  let force _ = console.write(y) in
+  console.write(x)
+
+def laziness_example_five(_):
+  // here's how to correctly
+  // prompt twice and then print in reverse:
+  let force x = console.read{} in
+  let force y = console.read{} in
+  let force _ = console.write(y) in
+  console.write(x)
+
+def add(a)(b):
+  a + b
+
+def main(_):
+  console.write(add(1)(2))
+
+

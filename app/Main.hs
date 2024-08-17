@@ -216,20 +216,25 @@ parseTerm = do
   _ <- whitespace0
   return out
 
-parseDecl :: Parser (String, String, Syntax)
+parseDecl :: Parser (String, Syntax)
 parseDecl = do
   _ <- exact "def"
   _ <- whitespace
   name <- identString
-  _ <- char '('
+  params <- many $ do
+    _ <- char '('
+    _ <- whitespace0
+    param <- patternString
+    _ <- whitespace0
+    _ <- char ')'
+    return param
   _ <- whitespace0
-  param <- patternString
-  _ <- whitespace0
-  _ <- char ')'
+  _ <- char ':'
   body <- parseTerm
-  return (name, param, body)
+  let body2 = foldr LambdaSyntax body params
+  return (name, body2)
 
-parseFile :: Parser [(String, String, Syntax)]
+parseFile :: Parser [(String, Syntax)]
 parseFile = many parseDecl
 
 data Term = Lambda Term
@@ -287,12 +292,12 @@ translate index id_gen ids renames t = case t of
         let (rhs2, id_gen3, ids3) = translate index id_gen2 ids2 renames rhs in
         (Operator lhs2 op rhs2, id_gen3, ids3)
 
-translateDecl :: Int -> Int -> Map.Map String Int -> Map.Map String Int -> (String, String, Syntax) -> ((String, Term), Int, Map.Map String Int)
-translateDecl index id_gen ids renames (foo, bar, body) = 
-  let (body2, id_gen2, ids2) = translate (index + 2) id_gen ids (Map.insert foo index $ Map.insert bar (index + 1) renames) body in
+translateDecl :: Int -> Int -> Map.Map String Int -> Map.Map String Int -> (String, Syntax) -> ((String, Term), Int, Map.Map String Int)
+translateDecl index id_gen ids renames (foo, body) = 
+  let (body2, id_gen2, ids2) = translate (index + 1) id_gen ids (Map.insert foo index renames) body in
   ((foo, body2), id_gen2, ids2)
 
-translateFile :: [(String, String, Syntax)] -> ([(String, Term)], Map.Map String Int)
+translateFile :: [(String, Syntax)] -> ([(String, Term)], Map.Map String Int)
 translateFile decls =
   let (decls2, _, out_ids) = foldr (\decl (so_far, id_gen, ids)->
           let (decl2, id_gen2, ids2) = translateDecl 0 id_gen ids Map.empty decl in
@@ -373,7 +378,7 @@ normalize d t ids = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
             _ -> error $ "`console.read` with wrong number of arguments: " ++ show (length stack)
         Builtin name -> 
           case lookup name decls of
-            Just def -> go decls (Lambda def) s (Env [(term, Env [])])
+            Just def -> go decls def s (Env [(term, Env [])])
             Nothing -> error $ "unknown global `" ++ name ++ "`"
         LetForce val scope -> do
           (normal_form, _, _) <- go decls val (Stack []) e
@@ -425,7 +430,7 @@ main = do
         Right (decls, "") -> do
           let (decls2, ids) = translateFile decls
           case lookup "main" decls2 of
-            Just entry -> normalize decls2 entry ids $> ()
-            Nothing -> error "no main function"
+            Just (Lambda entry) -> normalize decls2 entry ids $> ()
+            _ -> error "no main function"
         Right (_, c:_) -> putStrLn $ "unexpected `" ++ c:"`"
   
