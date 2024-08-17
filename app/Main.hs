@@ -321,6 +321,16 @@ normalize t = go t (Stack []) (Env []) >>= \(out, _, _) -> return out
               putStrLn $ pretty normal_form
               return (Int 0, Stack [], e)
             _ -> error $ "`print` with wrong number of arguments: " ++ show (length stack)
+        Builtin "input" ->
+          case stack of
+            [(arg, arg_env)] -> do
+              (normal_form, _, _) <- go arg (Stack []) arg_env
+              case normal_form of
+                Object labels | Map.null labels -> do
+                  i <- read <$> getLine
+                  return (Int i, s, e)
+                _ -> error $ "bad argument for `input`: `" ++ pretty normal_form ++ "`"
+            _ -> error $ "`input` with wrong number of arguments: " ++ show (length stack)
         Builtin name -> error $ "unknown builtin `" ++ name ++ "`"
         LetForce val scope -> do
           (normal_form, _, _) <- go val (Stack []) e
