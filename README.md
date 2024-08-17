@@ -98,12 +98,13 @@ which is mathematically due to the nice relationship between negative types (obj
 
 [^1]: This is another reason `let force` is a great fit for Cricket: situations where you don't want an object field to get re-evaluated every time its accessed!
 
-Here's an iterator in Cricket. I'm still thinking about how I'd make this nicer.
+Object fields are written `x.y: z` or `y: z`, depending on if you want access to `x`, the current object, in `z`.
+Here's an iterator in Cricket. 
 ```
 let iter = {
    this.go: start->step->{
-      t.val: start,
-      t.next: this.go(step(start))(step)
+      val: start,
+      next: this.go(step(start))(step)
    }
 } in
 print(iter.go(7)(n->n-1).next.next.val)
@@ -116,12 +117,12 @@ outputs:
 Cricket has a syntax sugar for passing objects to functions, so multi-parameter functions with labels can be simulated this way:
 ```
 let iter = {
-   this.go: args->{
-      t.val: args.start,
-      t.next: this.go{_.start: step(args.start), _.step: args.step}
-   }
-} in
-print(iter.go(_.start: 7, _step: n->n-1).next.next.val)
+  this.go: args->{
+    val: args.start, 
+    next: this.go{start: args.step(args.start), step: args.step}
+  }
+} in 
+print(iter.go{start: 7, step: n->n-1}.next.next.val)
 ```
 There are certainly situations where this helps readability, and maybe even performance but don't quote me on that.
 
