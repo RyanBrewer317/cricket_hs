@@ -45,6 +45,6 @@ def add(a)(b):
   a + b
 
 def main(_):
-  console.write(add("hello, ")("world!"))
+  console.write(add(3.5)(2.1))
 
 

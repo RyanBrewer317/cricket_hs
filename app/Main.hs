@@ -1,11 +1,12 @@
 {-# LANGUAGE LambdaCase #-}
 module Main (main) where
-import Data.Char (ord)
+import Data.Char (ord, isDigit)
 import qualified Data.Map as Map
 import Data.Functor (($>))
 import Data.List (intercalate)
 import Data.Foldable (foldl')
 import System.Environment (getArgs)
+import Data.Fixed (mod')
 
 newtype Parser a = Parser { run :: String -> Either String (a, String) }
 
@@ -34,9 +35,6 @@ instance Monad Parser where
 
 lowercase :: Parser Char
 lowercase = satisfy $ \c-> ord 'a' <= ord c && ord c <= ord 'z'
-
-int :: Parser Int
-int = read <$> many (satisfy $ \c -> ord '0' <= ord c && ord c <= ord '9')
 
 char :: Char -> Parser Char
 char c = satisfy $ \c2 -> c == c2
@@ -115,6 +113,7 @@ data Syntax = LambdaSyntax String Syntax
             | UpdateSyntax Syntax String String Syntax
             | OperatorSyntax Syntax String Syntax
             | StringSyntax String
+            | FloatSyntax Float
             deriving Show
 
 parseIdentOrLambda :: Parser Syntax
@@ -133,10 +132,16 @@ parseConstantLambda = do
   _ <- exact "->"
   LambdaSyntax "_" <$> parseTerm
 
-parseInt :: Parser Syntax
-parseInt = possible (char '-') >>= \case
-  Just _ -> IntSyntax . negate <$> int
-  Nothing -> IntSyntax <$> int
+parseNum :: Parser Syntax
+parseNum = do
+  mb_neg <- possible $ char '-'
+  whole <- many $ satisfy isDigit
+  mb_dec <- possible $ char '.' >> many (satisfy isDigit)
+  return $ case (mb_neg, mb_dec) of
+    (Just _, Just dec) -> FloatSyntax $ negate $ read $ whole ++ '.':dec
+    (Just _, Nothing) -> IntSyntax $ negate $ read whole
+    (Nothing, Just dec) -> FloatSyntax $ read $ whole ++ '.':dec
+    (Nothing, Nothing) -> IntSyntax $ read whole
 
 parseString :: Parser Syntax
 parseString = do
@@ -189,7 +194,7 @@ parseParens = char '(' *> parseTerm <* char ')'
 parseTermNoPostfix :: Parser Syntax
 parseTermNoPostfix = do
   _ <- whitespace0
-  t <- oneOf [parseParens, parseObject, parseConstantLambda, parseString, parseInt, parseLet, parseIdentOrLambda]
+  t <- oneOf [parseParens, parseObject, parseConstantLambda, parseString, parseNum, parseLet, parseIdentOrLambda]
   _ <- whitespace0
   return t
 
@@ -266,6 +271,7 @@ data Term = Lambda Term
           | Update Term Int Term
           | Operator Term String Term
           | String String
+          | Float Float
           deriving Show
 
 translate :: Int -> Int -> Map.Map String Int -> Map.Map String Int -> Syntax -> (Term, Int, Map.Map String Int)
@@ -311,6 +317,7 @@ translate index id_gen ids renames t = case t of
         let (rhs2, id_gen3, ids3) = translate index id_gen2 ids2 renames rhs in
         (Operator lhs2 op rhs2, id_gen3, ids3)
       StringSyntax s -> (String s, id_gen, ids)
+      FloatSyntax f -> (Float f, id_gen, ids)
 
 translateDecl :: Int -> Int -> Map.Map String Int -> Map.Map String Int -> (String, Syntax) -> ((String, Term), Int, Map.Map String Int)
 translateDecl index id_gen ids renames (foo, body) =
@@ -340,6 +347,7 @@ instance Pretty Term where
   pretty (Update term label new) = pretty term ++ " <- this." ++ show label ++ ": " ++ pretty new
   pretty (Operator lhs op rhs) = pretty lhs ++ " " ++ op ++ " " ++ pretty rhs
   pretty (String s) = "\"" ++ s ++ "\""
+  pretty (Float f) = show f
 
 newtype Env = Env [(Term, Env)] deriving Show
 
@@ -385,10 +393,9 @@ normalize d t ids = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
             [(arg, arg_env)] -> do
               (normal_form, _, _) <- go decls arg (Stack []) arg_env
               case normal_form of
-                String str -> do
-                  putStrLn str
-                Int i -> do
-                  print i
+                String str -> putStrLn str
+                Int i -> print i
+                Float f -> print f
                 _ -> error $ "can't write `" ++ pretty normal_form ++ "` to the console"
               return (Int 0, Stack [], e)
             _ -> error $ "`console.write` with wrong number of arguments: " ++ show (length stack)
@@ -433,13 +440,24 @@ normalize d t ids = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
           case (lhs_nf, op, rhs_nf) of
             (Int i, "+", Int j) -> return (Int $ i + j, s, e)
             (Int i, "-", Int j) -> return (Int $ i - j, s, e)
-            (Int _, _, Int _) -> error $ "unknown operator `" ++ op ++ "`"
+            (Int i, "*", Int j) -> return (Int $ i * j, s, e)
+            (Int i, "/", Int j) -> return (Int $ div i j, s, e)
+            (Int i, "%", Int j) -> return (Int $ mod i j, s, e)
             (String a, "+", String b) -> return (String $ a ++ b, s, e)
-            _ -> error $ "operator `" ++ op ++ "` applied to values of the wrong types: `" ++ pretty lhs_nf ++ "`, `" ++ pretty rhs ++ "`"
+            (Float a, "+", Float b) -> return (Float $ a + b, s, e)
+            (Float a, "-", Float b) -> return (Float $ a - b, s, e)
+            (Float a, "*", Float b) -> return (Float $ a * b, s, e)
+            (Float a, "/", Float b) -> return (Float $ a / b, s, e)
+            (Float a, "%", Float b) -> return (Float $ mod' a b, s, e)
+            _ -> error $ "operator `" ++ op ++ "` unknown or applied to values of the wrong types: `" ++ pretty lhs_nf ++ "`, `" ++ pretty rhs ++ "`"
         String _ -> do
           case stack of
             [] -> return (term, s, e)
             _ -> error "cannot call a string like a function"
+        Float _ -> do
+          case stack of
+            [] -> return (term, s, e)
+            _ -> error "cannot call a float like a function"
 
 main :: IO ()
 main = do
