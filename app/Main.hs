@@ -2,8 +2,9 @@
 module Main (main) where
 import Data.Char (ord)
 import qualified Data.Map as Map
-import Data.Foldable (foldl')
 import Data.Functor (($>))
+import Data.List (intercalate)
+import Data.Foldable (foldl')
 
 newtype Parser a = Parser { run :: String -> Either String (a, String) }
 
@@ -59,8 +60,8 @@ many p = Parser $ \s -> do -- Either monad, not Parser monad
   (x, rest) <- run p s
   run ((x:) <$> many0 p) rest
 
-exact :: String -> Parser ()
-exact s = foldr (\c p-> char c *> p) (return ()) s $> ()
+exact :: String -> Parser String
+exact s = foldr (\c p-> char c *> p) (return ()) s $> s
 
 sepBy :: Parser a -> Parser b -> Parser [b]
 sepBy by p = do
@@ -78,7 +79,13 @@ whitespace :: Parser [Char]
 whitespace = many $ oneOf [char ' ', char '\n']
 
 identString :: Parser String
-identString = many $ oneOf [lowercase, char '_']
+identString = do
+  first <- lowercase
+  rest <- many0 $ oneOf [lowercase, char '_']
+  return (first:rest)
+
+patternString :: Parser String
+patternString = oneOf [exact "_", identString]
 
 parseIdentOrLambda :: Parser Syntax
 parseIdentOrLambda = do
@@ -89,6 +96,13 @@ parseIdentOrLambda = do
     Just _ -> LambdaSyntax i <$> parseTerm
     Nothing -> return $ IdentSyntax i
 
+parseConstantLambda :: Parser Syntax
+parseConstantLambda = do
+  _ <- char '_'
+  _ <- whitespace0
+  _ <- exact "->"
+  LambdaSyntax "_" <$> parseTerm
+
 parseInt :: Parser Syntax
 parseInt = possible (char '-') >>= \case
   Just _ -> IntSyntax . negate <$> int
@@ -98,11 +112,11 @@ parseLet :: Parser Syntax
 parseLet = do
   _ <- exact "let"
   _ <- whitespace
-  w <- identString
+  w <- patternString
   _ <- whitespace0
   (ident, forced) <- case w of
     "force" -> do
-      i <- identString
+      i <- patternString
       return (i, True)
     i -> return (i, False)
   _ <- whitespace0
@@ -117,9 +131,13 @@ parseObject = do
   _ <- char '{'
   labels <- sepBy0 (char ',') $ do
     _ <- whitespace0
-    self <- identString
-    _ <- char '.'
-    method <- identString
+    w <- identString
+    mb_dot <- possible (char '.')
+    (self, method) <- case mb_dot of
+      Just _ -> do
+        method <- identString
+        return (w, method)
+      Nothing -> return ("_", w)
     _ <- whitespace0
     _ <- char ':'
     def <- parseTerm
@@ -134,30 +152,39 @@ parseParens = char '(' *> parseTerm <* char ')'
 parseTermNoPostfix :: Parser Syntax
 parseTermNoPostfix = do
   _ <- whitespace0
-  t <- oneOf [parseParens, parseObject, parseInt, parseLet, parseIdentOrLambda]
+  t <- oneOf [parseParens, parseObject, parseConstantLambda, parseInt, parseLet, parseIdentOrLambda]
   _ <- whitespace0
   return t
 
 data Postfix = AppPostfix Syntax
              | AccessPostfix String
              | UpdatePostfix String String Syntax
+             | OperatorPostfix String Syntax
 
 parseTerm :: Parser Syntax
 parseTerm = do
   t <- parseTermNoPostfix
-  args <- many0 $ oneOf [
-    fmap AppPostfix parseParens,
-    fmap AccessPostfix $ char '.' >> identString,
-    do
+  args <- many0 $ oneOf
+    [ AppPostfix <$> oneOf [parseParens, parseObject]
+    , fmap AccessPostfix $ char '.' >> identString
+    , do
       _ <- whitespace0
       _ <- exact "<-"
       _ <- whitespace0
-      self <- identString
-      _ <- char '.'
-      method <- identString
+      w <- identString
+      mb_dot <- possible (char '.')
+      (self, method) <- case mb_dot of
+        Just _ -> do
+          method <- identString
+          return (w, method)
+        Nothing -> return ("_", w)
       _ <- whitespace0
       _ <- char ':'
       UpdatePostfix self method <$> parseTerm
+    , do -- todo: pratt parsing; proper order of operations/infix levels
+      _ <- whitespace0
+      op <- oneOf [exact "+", exact "-"]
+      OperatorPostfix op <$> parseTerm
     ]
   let out = case args of
         [] -> t
@@ -165,6 +192,7 @@ parseTerm = do
             AppPostfix arg -> AppSyntax b arg
             AccessPostfix method -> AccessSyntax b method
             UpdatePostfix self method new -> UpdateSyntax b self method new
+            OperatorPostfix op rhs -> OperatorSyntax b op rhs
           ) t args
   _ <- whitespace0
   return out
@@ -177,6 +205,7 @@ data Syntax = LambdaSyntax String Syntax
             | ObjectSyntax [(String, String, Syntax)]
             | AccessSyntax Syntax String
             | UpdateSyntax Syntax String String Syntax
+            | OperatorSyntax Syntax String Syntax
             deriving Show
 
 translate :: Syntax -> Term
@@ -197,8 +226,8 @@ translate term = (\(out,_,_)->out) $ go 0 0 Map.empty Map.empty term
         (App foo2 bar2, id_gen3, ids3)
       IntSyntax i -> (Int i, id_gen, ids)
       LetSyntax True ident val scope ->
-        let (val2, id_gen2, ids2) = go (index + 1) id_gen ids (Map.insert ident index renames) val in
-        let (scope2, id_gen3, ids3) = go index id_gen2 ids2 renames scope in
+        let (val2, id_gen2, ids2) = go index id_gen ids renames val in
+        let (scope2, id_gen3, ids3) = go (index + 1) id_gen2 ids2 (Map.insert ident index renames) scope in
         (LetForce val2 scope2, id_gen3, ids3)
       LetSyntax False ident val scope -> go index id_gen ids renames $ AppSyntax (LambdaSyntax ident scope) val
       ObjectSyntax labels ->
@@ -220,6 +249,10 @@ translate term = (\(out,_,_)->out) $ go 0 0 Map.empty Map.empty term
         case Map.lookup method ids3 of
           Just i -> (Update object2 i def2, id_gen3, ids3)
           Nothing -> (Update object2 id_gen3 def2, id_gen3 + 1, Map.insert method id_gen3 ids3)
+      OperatorSyntax lhs op rhs ->
+        let (lhs2, id_gen2, ids2) = go index id_gen ids renames lhs in
+        let (rhs2, id_gen3, ids3) = go index id_gen2 ids2 renames rhs in
+        (Operator lhs2 op rhs2, id_gen3, ids3)
 
 data Term = Lambda Term
           | Ident Int
@@ -230,29 +263,32 @@ data Term = Lambda Term
           | Object (Map.Map Int Term)
           | Access Term Int
           | Update Term Int Term
+          | Operator Term String Term
+          deriving Show
 
 class Pretty a where
   pretty :: a -> String
 
 instance Pretty Term where
-  pretty (Lambda _body) = "Function"
+  pretty (Lambda body) = "()-> " ++ pretty body
   pretty (Ident i) = "'" ++ show i
   pretty (App foo bar) = "(" ++ pretty foo ++ ")(" ++ pretty bar ++ ")"
   pretty (Int i) = show i
-  pretty (Builtin name) = '$':name
+  pretty (Builtin name) = name
   pretty (LetForce val scope) = "force(" ++ pretty val ++ "): " ++ pretty scope
-  pretty (Object _labels) = "Object"
+  pretty (Object labels) = "{" ++ intercalate ", " (map (\(i,t)->"this."++show i++": "++pretty t) $ Map.toList labels) ++ "}"
   pretty (Access term label) = pretty term ++ "." ++ show label
-  pretty (Update term label new) = pretty term ++ "." ++ show label ++ " <- " ++ pretty new
+  pretty (Update term label new) = pretty term ++ " <- this." ++ show label ++ ": " ++ pretty new
+  pretty (Operator lhs op rhs) = pretty lhs ++ " " ++ op ++ " " ++ pretty rhs
 
-newtype Env = Env [(Term, Env)]
+newtype Env = Env [(Term, Env)] deriving Show
 
 instance Pretty Env where
   pretty (Env [(def, def_env)]) = "<" ++ pretty def ++ ", " ++ pretty def_env ++ ">"
   pretty (Env (closure:rest)) = pretty (Env [closure]) ++ ", " ++ pretty (Env rest)
   pretty (Env []) = ""
 
-newtype Stack = Stack [(Term, Env)]
+newtype Stack = Stack [(Term, Env)] deriving Show
 
 instance Pretty Stack where
   pretty (Stack l) = pretty (Env l)
@@ -284,8 +320,8 @@ normalize t = go t (Stack []) (Env []) >>= \(out, _, _) -> return out
               (normal_form, _, _) <- go arg (Stack []) arg_env
               putStrLn $ pretty normal_form
               return (Int 0, Stack [], e)
-            _ -> error $ "`$print` with wrong number of arguments: " ++ show (length stack)
-        Builtin name -> error $ "unknown builtin `$" ++ name ++ "`"
+            _ -> error $ "`print` with wrong number of arguments: " ++ show (length stack)
+        Builtin name -> error $ "unknown builtin `" ++ name ++ "`"
         LetForce val scope -> do
           (normal_form, _, _) <- go val (Stack []) e
           go scope s (Env $ (normal_form, e):env)
@@ -294,19 +330,27 @@ normalize t = go t (Stack []) (Env []) >>= \(out, _, _) -> return out
             [] -> return (term, s, e)
             _ -> error "cannot call an object like a function"
         Access ob method -> do
-          (normal_form, _, _) <- go ob (Stack []) e
+          (normal_form, _, Env ob_env) <- go ob (Stack []) e
           case normal_form of
             Object labels ->
               case Map.lookup method labels of
-                Just def -> go def s (Env $ (normal_form, e):env)
-                Nothing -> error "unknown object label"
-            _ -> error "cannot access a non-object"
+                Just def -> go def s (Env $ (normal_form, e):ob_env)
+                Nothing -> error $ "unknown object label (" ++ show method ++ ")"
+            _ -> error $ "cannot access a non-object (" ++ show method ++ ")"
         Update ob method def -> do
           (normal_form, _, _) <- go ob (Stack []) e
           case normal_form of
             Object labels ->
               return (Object $ Map.insert method def labels, s, e)
             _ -> error "cannot update a non-object"
+        Operator lhs op rhs -> do
+          (lhs_nf, _, _) <- go lhs (Stack []) e
+          (rhs_nf, _, _) <- go rhs (Stack []) e
+          case (lhs_nf, op, rhs_nf) of
+            (Int i, "+", Int j) -> return (Int $ i + j, s, e)
+            (Int i, "-", Int j) -> return (Int $ i - j, s, e)
+            (Int _, _, Int _) -> error $ "unknown operator `" ++ op ++ "`"
+            _ -> error $ "operator `" ++ op ++ "` applied to values of the wrong types: `" ++ pretty lhs_nf ++ "`, `" ++ pretty rhs ++ "`"
 
 main :: IO ()
 main = do
