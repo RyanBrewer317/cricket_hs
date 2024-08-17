@@ -72,11 +72,18 @@ sepBy by p = do
 sepBy0 :: Parser a -> Parser b -> Parser [b]
 sepBy0 by p = oneOf [sepBy by p, return []]
 
+comment :: Parser Char
+comment = do
+  _ <- exact "//"
+  _ <- many0 $ satisfy (/='\n')
+  _ <- possible $ char '\n'
+  return '\n'
+
 whitespace0 :: Parser [Char]
-whitespace0 = many0 $ oneOf [char ' ', char '\n']
+whitespace0 = many0 $ oneOf [char ' ', char '\n', comment]
 
 whitespace :: Parser [Char]
-whitespace = many $ oneOf [char ' ', char '\n']
+whitespace = many $ oneOf [char ' ', char '\n', comment]
 
 identString :: Parser String
 identString = do
@@ -208,8 +215,8 @@ data Syntax = LambdaSyntax String Syntax
             | OperatorSyntax Syntax String Syntax
             deriving Show
 
-translate :: Syntax -> Term
-translate term = (\(out,_,_)->out) $ go 0 0 Map.empty Map.empty term
+translate :: Syntax -> (Term, Map.Map String Int)
+translate term = (\(out,_,ids)->(out, ids)) $ go 0 0 Map.empty Map.empty term
   where
     go :: Int -> Int -> Map.Map String Int -> Map.Map String Int -> Syntax -> (Term, Int, Map.Map String Int)
     go index id_gen ids renames t = case t of
@@ -293,8 +300,8 @@ newtype Stack = Stack [(Term, Env)] deriving Show
 instance Pretty Stack where
   pretty (Stack l) = pretty (Env l)
 
-normalize :: Term -> IO Term
-normalize t = go t (Stack []) (Env []) >>= \(out, _, _) -> return out
+normalize :: (Term, Map.Map String Int) -> IO Term
+normalize (t, ids) = go t (Stack []) (Env []) >>= \(out, _, _) -> return out
   where
     go term s@(Stack stack) e@(Env env) = do
       -- putStrLn $ pretty term ++ " ; " ++ pretty s ++ "; " ++ pretty e ++ "."
@@ -314,14 +321,20 @@ normalize t = go t (Stack []) (Env []) >>= \(out, _, _) -> return out
           case stack of
             [] -> return (term, s, e)
             _ -> error "cannot call an integer like a function"
-        Builtin "print" ->
+        Builtin "console" -> do
+          case (Map.lookup "write" ids, Map.lookup "read" ids) of
+            (Just write_id, Just read_id) -> return (Object $ Map.fromList [(write_id, Builtin "_write"), (read_id, Builtin "_read")], s, e)
+            (Just write_id, Nothing) -> return (Object $ Map.fromList [(write_id, Builtin "_write")], s, e)
+            (Nothing, Just read_id) -> return (Object $ Map.fromList [(read_id, Builtin "_read")], s, e)
+            (Nothing, Nothing) -> return (Object Map.empty, s, e)
+        Builtin "_write" ->
           case stack of
             [(arg, arg_env)] -> do
               (normal_form, _, _) <- go arg (Stack []) arg_env
               putStrLn $ pretty normal_form
               return (Int 0, Stack [], e)
-            _ -> error $ "`print` with wrong number of arguments: " ++ show (length stack)
-        Builtin "input" ->
+            _ -> error $ "`console.write` with wrong number of arguments: " ++ show (length stack)
+        Builtin "_read" ->
           case stack of
             [(arg, arg_env)] -> do
               (normal_form, _, _) <- go arg (Stack []) arg_env
@@ -329,8 +342,8 @@ normalize t = go t (Stack []) (Env []) >>= \(out, _, _) -> return out
                 Object labels | Map.null labels -> do
                   i <- read <$> getLine
                   return (Int i, s, e)
-                _ -> error $ "bad argument for `input`: `" ++ pretty normal_form ++ "`"
-            _ -> error $ "`input` with wrong number of arguments: " ++ show (length stack)
+                _ -> error $ "bad argument for `console.read`: `" ++ pretty normal_form ++ "`"
+            _ -> error $ "`console.read` with wrong number of arguments: " ++ show (length stack)
         Builtin name -> error $ "unknown builtin `" ++ name ++ "`"
         LetForce val scope -> do
           (normal_form, _, _) <- go val (Stack []) e

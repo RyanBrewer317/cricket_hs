@@ -5,13 +5,13 @@ The goal is to minimize the implementation size so that the language is easy to 
 
 Cricket makes great use of objects, but it is primarily an impure lazy functional language.
 
-At the time of writing, every demo in this README works perfectly!
+As I write this, every demo in this README works perfectly!
 
 ### Laziness
 
 ```
 let infinite_loop = (x->x(x))(x->x(x)) in
-(_ -> let force _ = print(1) in print(2))(infinite_loop)
+(_ -> let force _ = console.write(1) in console.write(2))(infinite_loop)
 ```
 output:
 ```
@@ -32,30 +32,30 @@ The most famous lazy language is Haskell, and monads are infamously hard to gras
 There are two major issues laziness faces when it comes to side effects:
 
 1. We often don't care about the returned value from a side effect.
-   For example, `print` is generally seen as not really returning anything.
-   Laziness sees us not using the result and decides not to start the side effect at all!
-   Haskell deals with this by making side effects actually return results that you must use,
-   which leads straight into the world of monads.
+  For example, `print` is generally seen as not really returning anything.
+  Laziness sees us not using the result and decides not to start the side effect at all!
+  Haskell deals with this by making side effects actually return results that you must use,
+  which leads straight into the world of monads.
 2. Even if we *do* use the returned value of a side effect,
-   laziness may start the effect later than you expect.
-   For example, if you request user input a few times,
-   they will appear to the user in the order in which you *use the results,*
-   not the order you've written the prompts in your code.
-   This is painful, and we'd really like to just say that something should happen immediately.
+  laziness may start the effect later than you expect.
+  For example, if you request user input a few times,
+  they will appear to the user in the order in which you *use the results,*
+  not the order you've written the prompts in your code.
+  This is painful, and we'd really like to just say that something should happen immediately.
 
 Cricket solves this with the `let force` construct, which evaluates its value whether or not its used later, immediately.
 ```
-let _ = print(1) in print(2) // prints 2
+let _ = console.write(1) in console.write(2) // prints 2
 ```
 ```
-let force _ = print(1) in print(2) // prints 1, then 2
+let force _ = console.write(1) in console.write(2) // prints 1, then 2
 ```
-things going wrong:
+things going wrong (I'll get to the `{}` syntax when I discuss objects later):
 ```
-let x = input{} in
-let y = input{} in
-let force _ = print(y) in
-print(x)
+let x = console.read{} in
+let y = console.read{} in
+let force _ = console.write(y) in
+console.write(x)
 ```
 outputs:
 ```
@@ -66,10 +66,10 @@ outputs:
 ```
 things going right:
 ```
-let force x = input{} in
-let force y = input{} in
-let force _ = print(y) in
-print(x)
+let force x = console.read{} in
+let force y = console.read{} in
+let force _ = console.write(y) in
+console.write(x)
 ```
 outputs:
 ```
@@ -103,12 +103,12 @@ That is, you get to choose the name of your `this`/`self` parameter. I often cho
 Here's an iterator in Cricket. 
 ```
 let iter = {
-   this.go: start->step->{
-      val: start,
-      next: this.go(step(start))(step)
-   }
+  this.go: start->step->{
+    val: start,
+    next: this.go(step(start))(step)
+  }
 } in
-print(iter.go(7)(n->n-1).next.next.val)
+console.write(iter.go(7)(n->n-1).next.next.val)
 ```
 outputs:
 ```
@@ -123,7 +123,7 @@ let iter = {
     next: this.go{start: args.step(args.start), step: args.step}
   }
 } in 
-print(iter.go{start: 7, step: n->n-1}.next.next.val)
+console.write(iter.go{start: 7, step: n->n-1}.next.next.val)
 ```
 There are certainly situations where this helps readability, and maybe even performance but don't quote me on that.
 It can be painful too though:
@@ -132,13 +132,12 @@ If you're doing lots of higher-order programming, stick to curried arguments.
 
 ### Plans
 
-I want to switch to an object-based I/O interface, like `console.write` and `console.read`.
 I need more than just stdio I/O stuff too, like file IO and networking.
 As an embeddable language, great FFI with C is a must.
 I also need to add booleans, floats, and strings at the very least.
 And `let rec` for recursive bindings.
 Booleans (ie `if`/`else`) and recursive bindings would improve things quite a bit, I think.
-Nice syntax for lambda methods (like `{this.f(x): ...}` instead of `{this.f: x->...}` could be good.
+Nice syntax for lambda methods (like `{this.f(x): ...}` instead of `{this.f: x->...}`) could be good.
 And for let bindings too, like `let f(x) = ... in ...`.
 We need a better way of doing global definitions, too, like `def f(x) ...`.
 I really like back-passing sugar, so it'd be nice to have that too, like `let x <- f in ...` for `f(x -> ...)`.
