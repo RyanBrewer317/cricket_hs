@@ -59,10 +59,10 @@ console.write(x)
 ```
 outputs:
 ```
-> 1
-1
-> 2
-2
+> hi
+hi
+> world
+world
 ```
 things going right:
 ```
@@ -73,10 +73,10 @@ console.write(x)
 ```
 outputs:
 ```
-> 1
-> 2
-2
-1
+> hi
+> world
+world
+hi
 ```
 
 No monads required! This is much easier to wrap your head around.

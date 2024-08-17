@@ -95,6 +95,16 @@ identString = do
 patternString :: Parser String
 patternString = oneOf [exact "_", identString]
 
+escaped :: Parser Char
+escaped = do
+  _ <- char '\\'
+  c <- satisfy $ const True
+  case c of
+    'n' -> return '\n'
+    't' -> return '\t'
+    'r' -> return '\r'
+    _ -> return c
+
 data Syntax = LambdaSyntax String Syntax
             | IdentSyntax String
             | AppSyntax Syntax Syntax
@@ -104,6 +114,7 @@ data Syntax = LambdaSyntax String Syntax
             | AccessSyntax Syntax String
             | UpdateSyntax Syntax String String Syntax
             | OperatorSyntax Syntax String Syntax
+            | StringSyntax String
             deriving Show
 
 parseIdentOrLambda :: Parser Syntax
@@ -126,6 +137,13 @@ parseInt :: Parser Syntax
 parseInt = possible (char '-') >>= \case
   Just _ -> IntSyntax . negate <$> int
   Nothing -> IntSyntax <$> int
+
+parseString :: Parser Syntax
+parseString = do
+  _ <- char '"'
+  s <- many0 $ oneOf [escaped, satisfy (/='\"')]
+  _ <- char '"'
+  return $ StringSyntax s
 
 parseLet :: Parser Syntax
 parseLet = do
@@ -171,7 +189,7 @@ parseParens = char '(' *> parseTerm <* char ')'
 parseTermNoPostfix :: Parser Syntax
 parseTermNoPostfix = do
   _ <- whitespace0
-  t <- oneOf [parseParens, parseObject, parseConstantLambda, parseInt, parseLet, parseIdentOrLambda]
+  t <- oneOf [parseParens, parseObject, parseConstantLambda, parseString, parseInt, parseLet, parseIdentOrLambda]
   _ <- whitespace0
   return t
 
@@ -247,6 +265,7 @@ data Term = Lambda Term
           | Access Term Int
           | Update Term Int Term
           | Operator Term String Term
+          | String String
           deriving Show
 
 translate :: Int -> Int -> Map.Map String Int -> Map.Map String Int -> Syntax -> (Term, Int, Map.Map String Int)
@@ -291,9 +310,10 @@ translate index id_gen ids renames t = case t of
         let (lhs2, id_gen2, ids2) = translate index id_gen ids renames lhs in
         let (rhs2, id_gen3, ids3) = translate index id_gen2 ids2 renames rhs in
         (Operator lhs2 op rhs2, id_gen3, ids3)
+      StringSyntax s -> (String s, id_gen, ids)
 
 translateDecl :: Int -> Int -> Map.Map String Int -> Map.Map String Int -> (String, Syntax) -> ((String, Term), Int, Map.Map String Int)
-translateDecl index id_gen ids renames (foo, body) = 
+translateDecl index id_gen ids renames (foo, body) =
   let (body2, id_gen2, ids2) = translate (index + 1) id_gen ids (Map.insert foo index renames) body in
   ((foo, body2), id_gen2, ids2)
 
@@ -319,6 +339,7 @@ instance Pretty Term where
   pretty (Access term label) = pretty term ++ "." ++ show label
   pretty (Update term label new) = pretty term ++ " <- this." ++ show label ++ ": " ++ pretty new
   pretty (Operator lhs op rhs) = pretty lhs ++ " " ++ op ++ " " ++ pretty rhs
+  pretty (String s) = "\"" ++ s ++ "\""
 
 newtype Env = Env [(Term, Env)] deriving Show
 
@@ -355,28 +376,33 @@ normalize d t ids = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
             _ -> error "cannot call an integer like a function"
         Builtin "console" -> do
           case (Map.lookup "write" ids, Map.lookup "read" ids) of
-            (Just write_id, Just read_id) -> return (Object $ Map.fromList [(write_id, Builtin "_write"), (read_id, Builtin "_read")], s, e)
-            (Just write_id, Nothing) -> return (Object $ Map.fromList [(write_id, Builtin "_write")], s, e)
-            (Nothing, Just read_id) -> return (Object $ Map.fromList [(read_id, Builtin "_read")], s, e)
+            (Just write_id, Just read_id) -> return (Object $ Map.fromList [(write_id, Builtin "$write"), (read_id, Builtin "$read")], s, e)
+            (Just write_id, Nothing) -> return (Object $ Map.fromList [(write_id, Builtin "$write")], s, e)
+            (Nothing, Just read_id) -> return (Object $ Map.fromList [(read_id, Builtin "$read")], s, e)
             (Nothing, Nothing) -> return (Object Map.empty, s, e)
-        Builtin "_write" ->
+        Builtin "$write" ->
           case stack of
             [(arg, arg_env)] -> do
               (normal_form, _, _) <- go decls arg (Stack []) arg_env
-              putStrLn $ pretty normal_form
+              case normal_form of
+                String str -> do
+                  putStrLn str
+                Int i -> do
+                  print i
+                _ -> error $ "can't write `" ++ pretty normal_form ++ "` to the console"
               return (Int 0, Stack [], e)
             _ -> error $ "`console.write` with wrong number of arguments: " ++ show (length stack)
-        Builtin "_read" ->
+        Builtin "$read" ->
           case stack of
             [(arg, arg_env)] -> do
               (normal_form, _, _) <- go decls arg (Stack []) arg_env
               case normal_form of
                 Object labels | Map.null labels -> do
-                  i <- read <$> getLine
-                  return (Int i, s, e)
+                  str <- getLine
+                  return (String str, s, e)
                 _ -> error $ "bad argument for `console.read`: `" ++ pretty normal_form ++ "`"
             _ -> error $ "`console.read` with wrong number of arguments: " ++ show (length stack)
-        Builtin name -> 
+        Builtin name ->
           case lookup name decls of
             Just def -> go decls def s (Env [(term, Env [])])
             Nothing -> error $ "unknown global `" ++ name ++ "`"
@@ -408,7 +434,12 @@ normalize d t ids = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
             (Int i, "+", Int j) -> return (Int $ i + j, s, e)
             (Int i, "-", Int j) -> return (Int $ i - j, s, e)
             (Int _, _, Int _) -> error $ "unknown operator `" ++ op ++ "`"
+            (String a, "+", String b) -> return (String $ a ++ b, s, e)
             _ -> error $ "operator `" ++ op ++ "` applied to values of the wrong types: `" ++ pretty lhs_nf ++ "`, `" ++ pretty rhs ++ "`"
+        String _ -> do
+          case stack of
+            [] -> return (term, s, e)
+            _ -> error "cannot call a string like a function"
 
 main :: IO ()
 main = do
@@ -433,4 +464,3 @@ main = do
             Just (Lambda entry) -> normalize decls2 entry ids $> ()
             _ -> error "no main function"
         Right (_, c:_) -> putStrLn $ "unexpected `" ++ c:"`"
-  
