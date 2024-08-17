@@ -5,6 +5,7 @@ import qualified Data.Map as Map
 import Data.Functor (($>))
 import Data.List (intercalate)
 import Data.Foldable (foldl')
+import System.Environment (getArgs)
 
 newtype Parser a = Parser { run :: String -> Either String (a, String) }
 
@@ -93,6 +94,17 @@ identString = do
 
 patternString :: Parser String
 patternString = oneOf [exact "_", identString]
+
+data Syntax = LambdaSyntax String Syntax
+            | IdentSyntax String
+            | AppSyntax Syntax Syntax
+            | IntSyntax Int
+            | LetSyntax Bool String Syntax Syntax
+            | ObjectSyntax [(String, String, Syntax)]
+            | AccessSyntax Syntax String
+            | UpdateSyntax Syntax String String Syntax
+            | OperatorSyntax Syntax String Syntax
+            deriving Show
 
 parseIdentOrLambda :: Parser Syntax
 parseIdentOrLambda = do
@@ -204,62 +216,21 @@ parseTerm = do
   _ <- whitespace0
   return out
 
-data Syntax = LambdaSyntax String Syntax
-            | IdentSyntax String
-            | AppSyntax Syntax Syntax
-            | IntSyntax Int
-            | LetSyntax Bool String Syntax Syntax
-            | ObjectSyntax [(String, String, Syntax)]
-            | AccessSyntax Syntax String
-            | UpdateSyntax Syntax String String Syntax
-            | OperatorSyntax Syntax String Syntax
-            deriving Show
+parseDecl :: Parser (String, String, Syntax)
+parseDecl = do
+  _ <- exact "def"
+  _ <- whitespace
+  name <- identString
+  _ <- char '('
+  _ <- whitespace0
+  param <- patternString
+  _ <- whitespace0
+  _ <- char ')'
+  body <- parseTerm
+  return (name, param, body)
 
-translate :: Syntax -> (Term, Map.Map String Int)
-translate term = (\(out,_,ids)->(out, ids)) $ go 0 0 Map.empty Map.empty term
-  where
-    go :: Int -> Int -> Map.Map String Int -> Map.Map String Int -> Syntax -> (Term, Int, Map.Map String Int)
-    go index id_gen ids renames t = case t of
-      LambdaSyntax param body ->
-        let (body2, id_gen2, ids2) = go (index + 1) id_gen ids (Map.insert param index renames) body in
-        (Lambda body2, id_gen2, ids2)
-      IdentSyntax name ->
-        case Map.lookup name renames of
-          Just i -> (Ident (index - i - 1), id_gen, ids)
-          Nothing -> (Builtin name, id_gen, ids)
-      AppSyntax foo bar ->
-        let (foo2, id_gen2, ids2) = go index id_gen ids renames foo in
-        let (bar2, id_gen3, ids3) = go index id_gen2 ids2 renames bar in
-        (App foo2 bar2, id_gen3, ids3)
-      IntSyntax i -> (Int i, id_gen, ids)
-      LetSyntax True ident val scope ->
-        let (val2, id_gen2, ids2) = go index id_gen ids renames val in
-        let (scope2, id_gen3, ids3) = go (index + 1) id_gen2 ids2 (Map.insert ident index renames) scope in
-        (LetForce val2 scope2, id_gen3, ids3)
-      LetSyntax False ident val scope -> go index id_gen ids renames $ AppSyntax (LambdaSyntax ident scope) val
-      ObjectSyntax labels ->
-        let (labels2, id_gen2, ids2) = foldr (\(self, method, def) (so_far, idg, is)->
-                let (def2, idg2, is2) = go (index + 1) idg is (Map.insert self index renames) def in
-                case Map.lookup method is2 of
-                  Just i -> (Map.insert i def2 so_far, idg2, is2)
-                  Nothing -> (Map.insert idg2 def2 so_far, idg2 + 1, Map.insert method idg2 is2)
-              ) (Map.empty, id_gen, ids) labels in
-        (Object labels2, id_gen2, ids2)
-      AccessSyntax object method ->
-        let (object2, id_gen2, ids2) = go index id_gen ids renames object in
-        case Map.lookup method ids2 of
-          Just i -> (Access object2 i, id_gen2, ids2)
-          Nothing -> (Access object2 id_gen2, id_gen2 + 1, Map.insert method id_gen2 ids2)
-      UpdateSyntax object self method def ->
-        let (object2, id_gen2, ids2) = go index id_gen ids renames object in
-        let (def2, id_gen3, ids3) = go (index + 1) id_gen2 ids2 (Map.insert self index renames) def in
-        case Map.lookup method ids3 of
-          Just i -> (Update object2 i def2, id_gen3, ids3)
-          Nothing -> (Update object2 id_gen3 def2, id_gen3 + 1, Map.insert method id_gen3 ids3)
-      OperatorSyntax lhs op rhs ->
-        let (lhs2, id_gen2, ids2) = go index id_gen ids renames lhs in
-        let (rhs2, id_gen3, ids3) = go index id_gen2 ids2 renames rhs in
-        (Operator lhs2 op rhs2, id_gen3, ids3)
+parseFile :: Parser [(String, String, Syntax)]
+parseFile = many parseDecl
 
 data Term = Lambda Term
           | Ident Int
@@ -272,6 +243,62 @@ data Term = Lambda Term
           | Update Term Int Term
           | Operator Term String Term
           deriving Show
+
+translate :: Int -> Int -> Map.Map String Int -> Map.Map String Int -> Syntax -> (Term, Int, Map.Map String Int)
+translate index id_gen ids renames t = case t of
+      LambdaSyntax param body ->
+        let (body2, id_gen2, ids2) = translate (index + 1) id_gen ids (Map.insert param index renames) body in
+        (Lambda body2, id_gen2, ids2)
+      IdentSyntax name ->
+        case Map.lookup name renames of
+          Just i -> (Ident (index - i - 1), id_gen, ids)
+          Nothing -> (Builtin name, id_gen, ids)
+      AppSyntax foo bar ->
+        let (foo2, id_gen2, ids2) = translate index id_gen ids renames foo in
+        let (bar2, id_gen3, ids3) = translate index id_gen2 ids2 renames bar in
+        (App foo2 bar2, id_gen3, ids3)
+      IntSyntax i -> (Int i, id_gen, ids)
+      LetSyntax True ident val scope ->
+        let (val2, id_gen2, ids2) = translate index id_gen ids renames val in
+        let (scope2, id_gen3, ids3) = translate (index + 1) id_gen2 ids2 (Map.insert ident index renames) scope in
+        (LetForce val2 scope2, id_gen3, ids3)
+      LetSyntax False ident val scope -> translate index id_gen ids renames $ AppSyntax (LambdaSyntax ident scope) val
+      ObjectSyntax labels ->
+        let (labels2, id_gen2, ids2) = foldr (\(self, method, def) (so_far, idg, is)->
+                let (def2, idg2, is2) = translate (index + 1) idg is (Map.insert self index renames) def in
+                case Map.lookup method is2 of
+                  Just i -> (Map.insert i def2 so_far, idg2, is2)
+                  Nothing -> (Map.insert idg2 def2 so_far, idg2 + 1, Map.insert method idg2 is2)
+              ) (Map.empty, id_gen, ids) labels in
+        (Object labels2, id_gen2, ids2)
+      AccessSyntax object method ->
+        let (object2, id_gen2, ids2) = translate index id_gen ids renames object in
+        case Map.lookup method ids2 of
+          Just i -> (Access object2 i, id_gen2, ids2)
+          Nothing -> (Access object2 id_gen2, id_gen2 + 1, Map.insert method id_gen2 ids2)
+      UpdateSyntax object self method def ->
+        let (object2, id_gen2, ids2) = translate index id_gen ids renames object in
+        let (def2, id_gen3, ids3) = translate (index + 1) id_gen2 ids2 (Map.insert self index renames) def in
+        case Map.lookup method ids3 of
+          Just i -> (Update object2 i def2, id_gen3, ids3)
+          Nothing -> (Update object2 id_gen3 def2, id_gen3 + 1, Map.insert method id_gen3 ids3)
+      OperatorSyntax lhs op rhs ->
+        let (lhs2, id_gen2, ids2) = translate index id_gen ids renames lhs in
+        let (rhs2, id_gen3, ids3) = translate index id_gen2 ids2 renames rhs in
+        (Operator lhs2 op rhs2, id_gen3, ids3)
+
+translateDecl :: Int -> Int -> Map.Map String Int -> Map.Map String Int -> (String, String, Syntax) -> ((String, Term), Int, Map.Map String Int)
+translateDecl index id_gen ids renames (foo, bar, body) = 
+  let (body2, id_gen2, ids2) = translate (index + 2) id_gen ids (Map.insert foo index $ Map.insert bar (index + 1) renames) body in
+  ((foo, body2), id_gen2, ids2)
+
+translateFile :: [(String, String, Syntax)] -> ([(String, Term)], Map.Map String Int)
+translateFile decls =
+  let (decls2, _, out_ids) = foldr (\decl (so_far, id_gen, ids)->
+          let (decl2, id_gen2, ids2) = translateDecl 0 id_gen ids Map.empty decl in
+          (decl2:so_far, id_gen2, ids2)
+        ) ([], 0, Map.empty) decls in
+  (decls2, out_ids)
 
 class Pretty a where
   pretty :: a -> String
@@ -300,23 +327,23 @@ newtype Stack = Stack [(Term, Env)] deriving Show
 instance Pretty Stack where
   pretty (Stack l) = pretty (Env l)
 
-normalize :: (Term, Map.Map String Int) -> IO Term
-normalize (t, ids) = go t (Stack []) (Env []) >>= \(out, _, _) -> return out
+normalize :: [(String, Term)] -> Term -> Map.Map String Int -> IO Term
+normalize d t ids = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
   where
-    go term s@(Stack stack) e@(Env env) = do
+    go decls term s@(Stack stack) e@(Env env) = do
       -- putStrLn $ pretty term ++ " ; " ++ pretty s ++ "; " ++ pretty e ++ "."
       case term of
         Lambda body ->
           case stack of
-            arg:rest -> go body (Stack rest) (Env (arg:env))
+            arg:rest -> go decls body (Stack rest) (Env (arg:env))
             [] -> return (term, s, e)
         Ident 0 ->
           case env of
-            (def, new_env):_ -> go def s new_env
+            (def, new_env):_ -> go decls def s new_env
             [] -> error "undefined identifer"
-        Ident n -> go (Ident $ n - 1) s (Env $ tail env)
+        Ident n -> go decls (Ident $ n - 1) s (Env $ tail env)
         App foo bar ->
-          go foo (Stack $ (bar, e):stack) e
+          go decls foo (Stack $ (bar, e):stack) e
         Int _ ->
           case stack of
             [] -> return (term, s, e)
@@ -330,45 +357,48 @@ normalize (t, ids) = go t (Stack []) (Env []) >>= \(out, _, _) -> return out
         Builtin "_write" ->
           case stack of
             [(arg, arg_env)] -> do
-              (normal_form, _, _) <- go arg (Stack []) arg_env
+              (normal_form, _, _) <- go decls arg (Stack []) arg_env
               putStrLn $ pretty normal_form
               return (Int 0, Stack [], e)
             _ -> error $ "`console.write` with wrong number of arguments: " ++ show (length stack)
         Builtin "_read" ->
           case stack of
             [(arg, arg_env)] -> do
-              (normal_form, _, _) <- go arg (Stack []) arg_env
+              (normal_form, _, _) <- go decls arg (Stack []) arg_env
               case normal_form of
                 Object labels | Map.null labels -> do
                   i <- read <$> getLine
                   return (Int i, s, e)
                 _ -> error $ "bad argument for `console.read`: `" ++ pretty normal_form ++ "`"
             _ -> error $ "`console.read` with wrong number of arguments: " ++ show (length stack)
-        Builtin name -> error $ "unknown builtin `" ++ name ++ "`"
+        Builtin name -> 
+          case lookup name decls of
+            Just def -> go decls (Lambda def) s (Env [(term, Env [])])
+            Nothing -> error $ "unknown global `" ++ name ++ "`"
         LetForce val scope -> do
-          (normal_form, _, _) <- go val (Stack []) e
-          go scope s (Env $ (normal_form, e):env)
+          (normal_form, _, _) <- go decls val (Stack []) e
+          go decls scope s (Env $ (normal_form, e):env)
         Object _ ->
           case stack of
             [] -> return (term, s, e)
             _ -> error "cannot call an object like a function"
         Access ob method -> do
-          (normal_form, _, Env ob_env) <- go ob (Stack []) e
+          (normal_form, _, Env ob_env) <- go decls ob (Stack []) e
           case normal_form of
             Object labels ->
               case Map.lookup method labels of
-                Just def -> go def s (Env $ (normal_form, e):ob_env)
+                Just def -> go decls def s (Env $ (normal_form, e):ob_env)
                 Nothing -> error $ "unknown object label (" ++ show method ++ ")"
             _ -> error $ "cannot access a non-object (" ++ show method ++ ")"
         Update ob method def -> do
-          (normal_form, _, _) <- go ob (Stack []) e
+          (normal_form, _, _) <- go decls ob (Stack []) e
           case normal_form of
             Object labels ->
               return (Object $ Map.insert method def labels, s, e)
             _ -> error "cannot update a non-object"
         Operator lhs op rhs -> do
-          (lhs_nf, _, _) <- go lhs (Stack []) e
-          (rhs_nf, _, _) <- go rhs (Stack []) e
+          (lhs_nf, _, _) <- go decls lhs (Stack []) e
+          (rhs_nf, _, _) <- go decls rhs (Stack []) e
           case (lhs_nf, op, rhs_nf) of
             (Int i, "+", Int j) -> return (Int $ i + j, s, e)
             (Int i, "-", Int j) -> return (Int $ i - j, s, e)
@@ -377,8 +407,25 @@ normalize (t, ids) = go t (Stack []) (Env []) >>= \(out, _, _) -> return out
 
 main :: IO ()
 main = do
-  code <- getLine
-  case run parseTerm code of
-    Left err -> putStrLn err
-    Right (t, "") -> normalize (translate t) $> ()
-    Right (_, c:_) -> putStrLn $ "unexpected `" ++ c:"`"
+  args <- getArgs
+  case args of
+    [] -> do
+      code <- getLine
+      case run parseTerm code of
+        Left err -> putStrLn err
+        Right (t, "") -> do
+          let (t2, _, ids) = translate 0 0 Map.empty Map.empty t
+          _ <- normalize [] t2 ids
+          return ()
+        Right (_, c:_) -> putStrLn $ "unexpected `" ++ c:"`"
+    filename:_ -> do
+      code <- readFile filename
+      case run parseFile code of
+        Left err -> putStrLn err
+        Right (decls, "") -> do
+          let (decls2, ids) = translateFile decls
+          case lookup "main" decls2 of
+            Just entry -> normalize decls2 entry ids $> ()
+            Nothing -> error "no main function"
+        Right (_, c:_) -> putStrLn $ "unexpected `" ++ c:"`"
+  

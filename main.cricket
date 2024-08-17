@@ -1,0 +1,5 @@
+def foo(n)
+    let force _ = console.write(n) in
+    foo(n + 1)
+
+def main(_) foo(-2000)
