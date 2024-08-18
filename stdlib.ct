@@ -1,0 +1,2 @@
+def Maybe(_):
+  {Some: x-> case->case.Some(x), None: case->case.None}

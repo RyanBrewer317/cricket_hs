@@ -7,6 +7,9 @@ import Data.Foldable (foldl')
 import System.Environment (getArgs)
 import Data.Fixed (mod')
 import Data.Char (isAlpha, isDigit)
+import Data.Either (partitionEithers)
+import Data.Maybe (fromMaybe)
+import qualified Debug.Trace as Debug
 
 newtype Parser a = Parser { run :: String -> Either String (a, String) }
 
@@ -244,8 +247,11 @@ parseTerm = do
   _ <- whitespace0
   return out
 
-parseDecl :: Parser (String, Syntax)
-parseDecl = do
+data DeclSyntax = FuncSyntax String Syntax
+
+parseFuncDecl :: Parser (Either DeclSyntax a)
+parseFuncDecl = do
+  _ <- whitespace0
   _ <- exact "def"
   _ <- whitespace
   name <- identString
@@ -260,13 +266,20 @@ parseDecl = do
   _ <- char ':'
   body <- parseTerm
   let body2 = foldr LambdaSyntax body params
-  return (name, body2)
+  return $ Left $ FuncSyntax name body2
 
-parseFile :: Parser [(String, Syntax)]
-parseFile = many parseDecl
+parseImport :: Parser (Either a String)
+parseImport = do
+  _ <- whitespace0
+  _ <- exact "import"
+  _ <- whitespace
+  Right <$> identString <* whitespace0
 
-data Term = Lambda Term
-          | Ident Int
+parseFile :: Parser ([DeclSyntax], [String])
+parseFile = fmap partitionEithers $ many $ oneOf [parseFuncDecl, parseImport]
+
+data Term = Lambda String Term
+          | Ident Int String
           | App Term Term
           | Int Int
           | Builtin String
@@ -279,14 +292,16 @@ data Term = Lambda Term
           | Float Float
           deriving Show
 
+data Module = Module [Decl] (Map.Map String Int)
+
 translate :: Int -> Int -> Map.Map String Int -> Map.Map String Int -> Syntax -> (Term, Int, Map.Map String Int)
 translate index id_gen ids renames t = case t of
       LambdaSyntax param body ->
         let (body2, id_gen2, ids2) = translate (index + 1) id_gen ids (Map.insert param index renames) body in
-        (Lambda body2, id_gen2, ids2)
+        (Lambda param body2, id_gen2, ids2)
       IdentSyntax name ->
         case Map.lookup name renames of
-          Just i -> (Ident (index - i - 1), id_gen, ids)
+          Just i -> (Ident (index - i - 1) name, id_gen, ids)
           Nothing -> (Builtin name, id_gen, ids)
       AppSyntax foo bar ->
         let (foo2, id_gen2, ids2) = translate index id_gen ids renames foo in
@@ -324,12 +339,15 @@ translate index id_gen ids renames t = case t of
       StringSyntax s -> (String s, id_gen, ids)
       FloatSyntax f -> (Float f, id_gen, ids)
 
-translateDecl :: Int -> Int -> Map.Map String Int -> Map.Map String Int -> (String, Syntax) -> ((String, Term), Int, Map.Map String Int)
-translateDecl index id_gen ids renames (foo, body) =
-  let (body2, id_gen2, ids2) = translate (index + 1) id_gen ids (Map.insert foo index renames) body in
-  ((foo, body2), id_gen2, ids2)
+data Decl = Func String Term
 
-translateFile :: [(String, Syntax)] -> ([(String, Term)], Map.Map String Int)
+translateDecl :: Int -> Int -> Map.Map String Int -> Map.Map String Int -> DeclSyntax -> (Decl, Int, Map.Map String Int)
+translateDecl index id_gen ids renames decl = case decl of
+  FuncSyntax foo body ->
+    let (body2, id_gen2, ids2) = translate (index + 1) id_gen ids (Map.insert foo index renames) body in
+    (Func foo body2, id_gen2, ids2)
+
+translateFile :: [DeclSyntax]-> ([Decl], Map.Map String Int)
 translateFile decls =
   let (decls2, _, out_ids) = foldr (\decl (so_far, id_gen, ids)->
           let (decl2, id_gen2, ids2) = translateDecl 0 id_gen ids Map.empty decl in
@@ -338,49 +356,84 @@ translateFile decls =
   (decls2, out_ids)
 
 class Pretty a where
-  pretty :: a -> String
+  pretty :: Map.Map String Int -> a -> String
 
 instance Pretty Term where
-  pretty (Lambda body) = "()-> " ++ pretty body
-  pretty (Ident i) = "'" ++ show i
-  pretty (App foo bar) = "(" ++ pretty foo ++ ")(" ++ pretty bar ++ ")"
-  pretty (Int i) = show i
-  pretty (Builtin name) = name
-  pretty (LetForce val scope) = "force(" ++ pretty val ++ "): " ++ pretty scope
-  pretty (Object labels) = "{" ++ intercalate ", " (map (\(i,t)->"this."++show i++": "++pretty t) $ Map.toList labels) ++ "}"
-  pretty (Access term label) = pretty term ++ "." ++ show label
-  pretty (Update term label new) = pretty term ++ " <- this." ++ show label ++ ": " ++ pretty new
-  pretty (Operator lhs op rhs) = pretty lhs ++ " " ++ op ++ " " ++ pretty rhs
-  pretty (String s) = "\"" ++ s ++ "\""
-  pretty (Float f) = show f
+  pretty ids (Lambda x body) = x ++ "-> " ++ pretty ids body
+  pretty _ (Ident _ s) = s
+  pretty ids (App foo bar) = "(" ++ pretty ids foo ++ ")(" ++ pretty ids bar ++ ")"
+  pretty _ (Int i) = show i
+  pretty _ (Builtin name) = name
+  pretty ids (LetForce val scope) = "force(" ++ pretty ids val ++ "): " ++ pretty ids scope
+  pretty ids (Object labels) = "{" ++ intercalate ", " (map (\(i,t)->"this."++idToMethod ids i++": "++pretty ids t) $ Map.toList labels) ++ "}"
+  pretty ids (Access term label) = pretty ids term ++ "." ++ idToMethod ids label
+  pretty ids (Update term label new) = pretty ids term ++ " <- this." ++ idToMethod ids label ++ ": " ++ pretty ids new
+  pretty ids (Operator lhs op rhs) = pretty ids lhs ++ " " ++ op ++ " " ++ pretty ids rhs
+  pretty _ (String s) = "\"" ++ s ++ "\""
+  pretty _ (Float f) = show f
 
 newtype Env = Env [(Term, Env)] deriving Show
 
 instance Pretty Env where
-  pretty (Env [(def, def_env)]) = "<" ++ pretty def ++ ", " ++ pretty def_env ++ ">"
-  pretty (Env (closure:rest)) = pretty (Env [closure]) ++ ", " ++ pretty (Env rest)
-  pretty (Env []) = ""
+  pretty ids (Env [(def, def_env)]) = "<" ++ pretty ids def ++ ", " ++ pretty ids def_env ++ ">"
+  pretty ids (Env (closure:rest)) = pretty ids (Env [closure]) ++ ", " ++ pretty ids (Env rest)
+  pretty _ (Env []) = ""
 
 newtype Stack = Stack [(Term, Env)] deriving Show
 
 instance Pretty Stack where
-  pretty (Stack l) = pretty (Env l)
+  pretty ids (Stack l) = pretty ids (Env l)
 
-normalize :: [(String, Term)] -> Term -> Map.Map String Int -> IO Term
-normalize d t ids = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
+swapObjectLabels :: [(Int, Int)] -> Term -> Term
+swapObjectLabels swaps t = 
+  let swap = swapObjectLabels $ Debug.trace (show swaps) swaps in
+  case t of
+    Lambda x body -> Lambda x $ swap body
+    App foo bar -> App (swap foo) (swap bar)
+    LetForce val scope -> LetForce (swap val) (swap scope)
+    Object labels -> Object $ Map.mapKeys (\i->fromMaybe i $ lookup i swaps) labels
+    Access ob i -> Access (swap ob) (fromMaybe i $ lookup i swaps)
+    Update ob i v -> Update (swap ob) (fromMaybe i $ lookup i swaps) (swap v)
+    Operator lhs op rhs -> Operator (swap lhs) op (swap rhs)
+    _ -> t
+
+swapObjectLabelsInDecls :: [(Int, Int)] -> [Decl] -> [Decl]
+swapObjectLabelsInDecls swaps decls = case decls of
+  Func name body : rest -> Func name (swapObjectLabels swaps body) : swapObjectLabelsInDecls swaps rest
+  [] -> []
+
+swapSet :: Map.Map String Int -> Map.Map String Int -> [(Int, Int)]
+swapSet ids1 ids2 = Map.elems $ Map.mapWithKey (\s i->(i, fromMaybe i $ Map.lookup s ids2)) ids1
+
+modToObject :: Map.Map String Int -> Module -> Map.Map Int Term
+modToObject ids (Module decls _) = 
+  foldr (\(Func name def) so_far->
+    case Map.lookup name ids of
+      Just i -> Map.insert i def so_far
+      Nothing -> so_far
+  ) Map.empty decls
+
+idToMethod :: Map.Map String Int -> Int -> String
+idToMethod ids i =
+  case Map.toList $ Map.filter (==i) ids of
+    [(name, _)] -> name
+    _ -> error "internal error"
+
+normalize :: [Decl] -> Term -> Map.Map String Int -> Map.Map String Module -> IO Term
+normalize d t ids mods = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
   where
     go decls term s@(Stack stack) e@(Env env) = do
       -- putStrLn $ pretty term ++ " ; " ++ pretty s ++ "; " ++ pretty e ++ "."
       case term of
-        Lambda body ->
+        Lambda _ body ->
           case stack of
             arg:rest -> go decls body (Stack rest) (Env (arg:env))
             [] -> return (term, s, e)
-        Ident 0 ->
+        Ident 0 name ->
           case env of
             (def, new_env):_ -> go decls def s new_env
-            [] -> error "undefined identifer"
-        Ident n -> go decls (Ident $ n - 1) s (Env $ tail env)
+            [] -> error $ "undefined identifer `" ++ name ++ "`"
+        Ident n name -> go decls (Ident (n - 1) name) s (Env $ tail env)
         App foo bar ->
           go decls foo (Stack $ (bar, e):stack) e
         Int _ ->
@@ -388,7 +441,7 @@ normalize d t ids = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
             [] -> return (term, s, e)
             _ -> error "cannot call an integer like a function"
         Builtin "console" -> do
-          case (Map.lookup "write" ids, Map.lookup "read" ids) of
+          case (Map.lookup "write" (Debug.trace (show ids) ids), Map.lookup "read" ids) of
             (Just write_id, Just read_id) -> return (Object $ Map.fromList [(write_id, Builtin "$write"), (read_id, Builtin "$read")], s, e)
             (Just write_id, Nothing) -> return (Object $ Map.fromList [(write_id, Builtin "$write")], s, e)
             (Nothing, Just read_id) -> return (Object $ Map.fromList [(read_id, Builtin "$read")], s, e)
@@ -401,7 +454,7 @@ normalize d t ids = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
                 String str -> putStrLn str
                 Int i -> print i
                 Float f -> print f
-                _ -> error $ "can't write `" ++ pretty normal_form ++ "` to the console"
+                _ -> error $ "can't write `" ++ pretty ids normal_form ++ "` to the console"
               return (Int 0, Stack [], e)
             _ -> error $ "`console.write` with wrong number of arguments: " ++ show (length stack)
         Builtin "$read" ->
@@ -412,27 +465,30 @@ normalize d t ids = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
                 Object labels | Map.null labels -> do
                   str <- getLine
                   return (String str, s, e)
-                _ -> error $ "bad argument for `console.read`: `" ++ pretty normal_form ++ "`"
+                _ -> error $ "bad argument for `console.read`: `" ++ pretty ids normal_form ++ "`"
             _ -> error $ "`console.read` with wrong number of arguments: " ++ show (length stack)
         Builtin name ->
-          case lookup name decls of
+          case fetch name decls of
             Just def -> go decls def s (Env [(term, Env [])])
-            Nothing -> error $ "unknown global `" ++ name ++ "`"
+            Nothing -> 
+              case Map.lookup name mods of
+                Just m -> return (Object $ modToObject ids m, s, e)
+                Nothing -> error $ "unknown global `" ++ name ++ "`"
         LetForce val scope -> do
           (normal_form, _, _) <- go decls val (Stack []) e
           go decls scope s (Env $ (normal_form, e):env)
         Object _ ->
           case stack of
             [] -> return (term, s, e)
-            _ -> error $ "cannot call an object like a function: `" ++ pretty term ++ "`"
+            _ -> error $ "cannot call an object like a function: `" ++ pretty ids term ++ "`"
         Access ob method -> do
           (normal_form, _, Env ob_env) <- go decls ob (Stack []) e
           case normal_form of
             Object labels ->
               case Map.lookup method labels of
                 Just def -> go decls def s (Env $ (normal_form, e):ob_env)
-                Nothing -> error $ "unknown object label (" ++ show method ++ ")"
-            _ -> error $ "cannot access a non-object `" ++ pretty (Access normal_form method) ++ "`"
+                Nothing -> error $ "unknown object label `" ++ idToMethod ids method ++ "` on `" ++ pretty ids normal_form ++ "`"
+            _ -> error $ "cannot access a non-object `" ++ pretty ids (Access normal_form method) ++ "`"
         Update ob method def -> do
           (normal_form, _, _) <- go decls ob (Stack []) e
           case normal_form of
@@ -454,7 +510,7 @@ normalize d t ids = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
             (Float a, "*", Float b) -> return (Float $ a * b, s, e)
             (Float a, "/", Float b) -> return (Float $ a / b, s, e)
             (Float a, "%", Float b) -> return (Float $ mod' a b, s, e)
-            _ -> error $ "operator `" ++ op ++ "` unknown or applied to values of the wrong types: `" ++ pretty lhs_nf ++ "`, `" ++ pretty rhs ++ "`"
+            _ -> error $ "operator `" ++ op ++ "` unknown or applied to values of the wrong types: `" ++ pretty ids lhs_nf ++ "`, `" ++ pretty ids rhs ++ "`"
         String _ -> do
           case stack of
             [] -> return (term, s, e)
@@ -463,6 +519,27 @@ normalize d t ids = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
           case stack of
             [] -> return (term, s, e)
             _ -> error "cannot call a float like a function"
+
+fetch :: String -> [Decl] -> Maybe Term
+fetch s (Func name body:_) | s == name = Just body
+fetch s (_:rest) = fetch s rest
+fetch _ [] = Nothing
+
+processImport :: String -> IO (Either String (Map.Map String Module))
+processImport srcName = do
+  src <- readFile $ srcName ++ ".ct"
+  case run parseFile src of
+    Left err -> return $ Left err
+    Right ((decls, imports), "") -> do
+      eithers <- mapM processImport imports
+      let (errors, successes) = partitionEithers eithers
+      return $ case errors of
+        err:_ -> Left err
+        [] ->
+          let modules = foldr Map.union Map.empty successes in
+          let (decls2, ids) = translateFile decls in
+          Right $ Map.insert srcName (Module decls2 ids) modules
+    Right (_, c:_) -> return $ Left $ "unexpected `" ++ c:"`"
 
 main :: IO ()
 main = do
@@ -474,16 +551,22 @@ main = do
         Left err -> putStrLn err
         Right (t, "") -> do
           let (t2, _, ids) = translate 0 0 Map.empty Map.empty t
-          _ <- normalize [] t2 ids
+          _ <- normalize [] t2 ids Map.empty
           return ()
         Right (_, c:_) -> putStrLn $ "unexpected `" ++ c:"`"
     filename:_ -> do
       code <- readFile filename
       case run parseFile code of
         Left err -> putStrLn err
-        Right (decls, "") -> do
+        Right ((decls, imports), "") -> do
+          eithers <- mapM processImport imports
+          let (errors, successes) = partitionEithers eithers
+          let mods = case errors of
+                err:_ -> error err
+                [] -> foldr Map.union Map.empty successes
           let (decls2, ids) = translateFile decls
-          case lookup "main" decls2 of
-            Just (Lambda entry) -> normalize decls2 entry ids $> ()
+          let mods2 = Map.map (\(Module decls3 ids2)->Module (swapObjectLabelsInDecls (swapSet ids2 ids) decls3) ids2) mods
+          case fetch "main" decls2 of
+            Just (Lambda _ entry) -> normalize decls2 entry ids mods2 $> ()
             _ -> error "no main function"
         Right (_, c:_) -> putStrLn $ "unexpected `" ++ c:"`"

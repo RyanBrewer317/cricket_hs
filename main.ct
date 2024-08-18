@@ -76,7 +76,7 @@ def object_example_3(_):
   console.write(cooper.name + " says: " + cooper.bark)
 
 def Maybe(_):
-  {Some: x->c->c.Some(x), None: c->c.None}
+  {Some: x-> case->case.Some(x), None: case->case.None}
 
 def List(_):
   {Empty: c->c.Empty, Has: h->t->c->c.Has(h)(t)}
