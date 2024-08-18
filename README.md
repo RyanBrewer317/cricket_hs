@@ -5,7 +5,7 @@ The goal is to minimize the implementation size so that the language is easy to 
 
 Cricket makes great use of objects, but it is primarily an impure lazy functional language.
 
-As I write this, every demo in this README works perfectly!
+As I write this, every demo in this README [works perfectly](https://github.com/RyanBrewer317/cricket/blob/main/main.ct)!
 
 ### Laziness
 
