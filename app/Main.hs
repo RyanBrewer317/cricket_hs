@@ -1,12 +1,12 @@
 {-# LANGUAGE LambdaCase #-}
 module Main (main) where
-import Data.Char (ord, isDigit)
 import qualified Data.Map as Map
 import Data.Functor (($>))
 import Data.List (intercalate)
 import Data.Foldable (foldl')
 import System.Environment (getArgs)
 import Data.Fixed (mod')
+import Data.Char (isAlpha, isDigit)
 
 newtype Parser a = Parser { run :: String -> Either String (a, String) }
 
@@ -32,9 +32,6 @@ instance Monad Parser where
   pa >>= f = Parser $ \s -> do
     (a, rest) <- run pa s
     run (f a) rest
-
-lowercase :: Parser Char
-lowercase = satisfy $ \c-> ord 'a' <= ord c && ord c <= ord 'z'
 
 char :: Char -> Parser Char
 char c = satisfy $ \c2 -> c == c2
@@ -86,12 +83,20 @@ whitespace = many $ oneOf [char ' ', char '\n', comment]
 
 identString :: Parser String
 identString = do
-  first <- lowercase
-  rest <- many0 $ oneOf [lowercase, char '_']
+  first <- satisfy isAlpha
+  rest <- many0 $ oneOf [satisfy isAlpha, char '_', satisfy isDigit]
   return (first:rest)
 
 patternString :: Parser String
-patternString = oneOf [exact "_", identString]
+patternString = oneOf
+  [ identString
+  , do
+    _ <- char '_'
+    mb_rest <- possible identString
+    case mb_rest of
+      Just rest -> return $ '_':rest
+      Nothing -> return "_"
+  ]
 
 escaped :: Parser Char
 escaped = do
@@ -419,7 +424,7 @@ normalize d t ids = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
         Object _ ->
           case stack of
             [] -> return (term, s, e)
-            _ -> error "cannot call an object like a function"
+            _ -> error $ "cannot call an object like a function: `" ++ pretty term ++ "`"
         Access ob method -> do
           (normal_form, _, Env ob_env) <- go decls ob (Stack []) e
           case normal_form of
@@ -427,7 +432,7 @@ normalize d t ids = go d t (Stack []) (Env []) >>= \(out, _, _) -> return out
               case Map.lookup method labels of
                 Just def -> go decls def s (Env $ (normal_form, e):ob_env)
                 Nothing -> error $ "unknown object label (" ++ show method ++ ")"
-            _ -> error $ "cannot access a non-object (" ++ show method ++ ")"
+            _ -> error $ "cannot access a non-object `" ++ pretty (Access normal_form method) ++ "`"
         Update ob method def -> do
           (normal_form, _, _) <- go decls ob (Stack []) e
           case normal_form of

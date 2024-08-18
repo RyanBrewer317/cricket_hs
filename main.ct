@@ -7,24 +7,24 @@ def omega(_):
 def infinitely_recursive_object(_):
   {this.x: this.x}.x 
 
-def laziness_example_one(_):
+def laziness_example_1(_):
   // print 1, then 2
   (_ -> 
     let force _ = console.write(1) in
     console.write(2)
   )(infinite_recursion{})
 
-def laziness_example_two(_):
-  // print 2
-  let _ = console.write(1) in
-  console.write(2)
+def laziness_example_2(_):
+  // print b
+  let _ = console.write("a") in
+  console.write("b")
 
-def laziness_example_three(_):
+def laziness_example_3(_):
   // print 1, then 2
   let force _ = console.write(1) in
   console.write(2)
 
-def laziness_example_four(_):
+def laziness_example_4(_):
   // demonstrating how laziness causes problems
   // this function echoes twice, 
   // instead of two prompts and then printing in reverse
@@ -33,7 +33,7 @@ def laziness_example_four(_):
   let force _ = console.write(y) in
   console.write(x)
 
-def laziness_example_five(_):
+def laziness_example_5(_):
   // here's how to correctly
   // prompt twice and then print in reverse:
   let force x = console.read{} in
@@ -41,10 +41,90 @@ def laziness_example_five(_):
   let force _ = console.write(y) in
   console.write(x)
 
-def add(a)(b):
-  a + b
+def object_example_1(_):
+  // a bunch of fun object trickery!
+  let list = {
+    e: case -> case.Empty,
+    p: first-> rest-> case-> case.Has(first)(rest)
+  } in
+  let l = list.p(-0.5)(list.p(-0.6)(list.p(-0.2)(list.e))) in
+  // print out all the elements
+  l{
+    Empty: 0,
+    this.Has: first-> rest-> 
+      let force _ = console.write(first) in
+      rest(this) // apply this same pattern match to the tail!
+  }
+
+def object_example_2(_):
+  let list = {
+    e: case -> case.Empty,
+    p: first-> rest-> case-> case.Has(first)(rest)
+  } in
+  let stream_of_ones = {this.val: list.p("hi!")(this.val)}.val in
+  stream_of_ones{
+    Has: first-> t-> t{
+      Has: second-> _->
+        let force _ = console.write(first) in
+        console.write(second)
+    }
+  }
+
+def object_example_3(_):
+  let dog = {bark: "woof!"} in
+  let cooper = dog <- name: "Cooper" in
+  console.write(cooper.name + " says: " + cooper.bark)
+
+def Maybe(_):
+  {Some: x->c->c.Some(x), None: c->c.None}
+
+def List(_):
+  {Empty: c->c.Empty, Has: h->t->c->c.Has(h)(t)}
+
+def Iter(l):
+  let Maybe = Maybe{} in
+  l{
+    Empty: {
+      val: Maybe.None,
+      next: Iter(l)
+    },
+    Has: first-> rest-> {
+      val: Maybe.Some(first),
+      next: Iter(rest)
+    }
+  }
+
+def object_example_4(_):
+  let List = List{} in
+  let my_list =
+    List.Has(7)(
+      List.Has(4)(
+        List.Has(5)(List.Empty)
+      )
+    ) in
+  let fourth = it-> it.next.next.next.val in
+  // print "null"
+  let force _ = fourth(Iter(my_list)){
+    Some: x-> console.write(x), // we could exclude this branch
+    None: console.write("empty")
+  } in
+  // print 5
+  fourth(Iter(List.Has(2)(my_list))){
+    Some: x-> console.write(x),
+    None: console.write("empty") // we could exclude this branch
+  }
 
 def main(_):
-  console.write(add(3.5)(2.1))
+  let force _ = laziness_example_1{} in // print 1 then 2
+  let force _ = laziness_example_2{} in // print "b"
+  let force _ = laziness_example_3{} in // print 1 then 2
+  // I commented these out because entering input is annoying:
+  // let force _ = laziness_example_4{} in 
+  // let force _ = laziness_example_5{} in
+  let force _ = object_example_1{} in // print -0.5 then -0.6 then -0.2
+  let force _ = object_example_2{} in // print "hi!" twice
+  let force _ = object_example_3{} in // print "Cooper says: woof!"
+  let force _ = object_example_4{} in // print "empty" then 5
+  console.write("All examples finished!")
 
 

@@ -100,35 +100,77 @@ Object fields are written `x.y: z` or `y: z`, depending on if you want access to
 This is a little like in Go, where methods are written `func (o Obj) method(args) ty { ... }`.
 That is, you get to choose the name of your `this`/`self` parameter. I often choose `this`.
 
-Here's an iterator in Cricket. 
+Here's a list in Cricket. 
 ```
-let iter = {
-  this.go: start->step->{
-    val: start,
-    next: this.go(step(start))(step)
-  }
+let list = {
+  e: case -> case.empty,
+  p: first-> rest-> case-> case.has(first)(rest)
 } in
-console.write(iter.go(7)(n->n-1).next.next.val)
+let l = list.p(1)(list.p(2)(list.p(3)(list.e))) in
+// print out all the elements
+l{
+  empty: 0,
+  this.has: first-> rest-> 
+    let force _ = console.write(first) in
+    rest(this) // anonymous recursion: apply this same pattern match to the tail!
+}
 ```
 outputs:
 ```
-5
+1
+2
+3
 ```
 
-Cricket has a syntax sugar for passing objects to functions, so multi-parameter functions with labels can be simulated this way:
+Let's unpack this. We first make a sort of namespace object, called `list`.
+Notice how it has two methods, each taking some object that we call `case` and evaluating one of its fields.
+That means that the list we construct, `l`, is a *function!*
+In Cricket, object literals can be given to functions without wrapping them in parentheses:
+`foo({val: bar})` can be written `foo{val: bar}`.
+We give `l` an object this way that handles each of its two possibilities.
+If it was constructed with `list.e` ("empty"), we halt with `0`.
+If, on the other hand, it was constructed with `list.p` ("prepend"),
+we write the first element of the list to the console,
+and then apply the current pattern match (which we've named `this`)
+to the rest of the list.
+
+This demonstrates how one might write the ADTs (positive types) we know and love from other functional languages.
+Note that it's perfectly fine to omit cases if you know they're impossible:
+
 ```
-let iter = {
-  this.go: args->{
-    val: args.start, 
-    next: this.go{start: args.step(args.start), step: args.step}
+let stream_of_ones = {this.val: list.p("hi!")(this.val)}.val in
+stream_of_ones{
+  has: first-> t-> t{
+    has: second-> _->
+      let force _ = console.write(first) in
+      console.write(second)
   }
-} in 
-console.write(iter.go{start: 7, step: n->n-1}.next.next.val)
+}
 ```
-There are certainly situations where this helps readability, and maybe even performance but don't quote me on that.
-It can be painful too though:
-common higher-order functions like `curry` can't work because callers need to know the callee's parameter names.
-If you're doing lots of higher-order programming, stick to curried arguments.
+outputs:
+```
+hi!
+hi!
+```
+
+Our infinite stream here is lazy, and if we only need the first two values then all's well!
+
+Now let's look at some OOP things:
+
+```
+let dog = {bark: "woof!"} in
+let cooper = dog <- name: "Cooper" in
+console.write(cooper.name + " says: " + cooper.bark)
+```
+outputs:
+```
+Cooper says: woof!
+```
+
+The `ob <- f: val` syntax returns a new object that is the same as `ob` except it has a field `f` of value `val`.
+Here we use it to specialize objects, like a prototypical form of inheritance.
+
+
 
 ### Plans
 
