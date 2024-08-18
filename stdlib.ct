@@ -1,2 +1,21 @@
-def Maybe(_):
-  {Some: x-> case->case.Some(x), None: case->case.None}
+def Maybe {
+  Some: x-> case-> case.Some(x), 
+  None: case-> case.None
+}
+
+def List {
+  Empty: case-> case.Empty, 
+  Has: first-> rest-> case-> case.Has(first)(rest)
+}
+
+def Iter(l):
+  l{
+    Empty: {
+      val: Maybe.None,
+      next: Iter(l)
+    },
+    Has: first-> rest-> {
+      val: Maybe.Some(first),
+      next: Iter(rest)
+    }
+  }

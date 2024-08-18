@@ -75,27 +75,12 @@ def object_example_3(_):
   let cooper = dog <- name: "Cooper" in
   console.write(cooper.name + " says: " + cooper.bark)
 
-def Maybe(_):
-  {Some: x-> case->case.Some(x), None: case->case.None}
-
-def List(_):
-  {Empty: c->c.Empty, Has: h->t->c->c.Has(h)(t)}
-
-def Iter(l):
-  let Maybe = Maybe{} in
-  l{
-    Empty: {
-      val: Maybe.None,
-      next: Iter(l)
-    },
-    Has: first-> rest-> {
-      val: Maybe.Some(first),
-      next: Iter(rest)
-    }
-  }
+import stdlib
 
 def object_example_4(_):
-  let List = List{} in
+  let List = stdlib.List in
+  let Iter = stdlib.Iter in
+  let force _ = console.write(Iter) in
   let my_list =
     List.Has(7)(
       List.Has(4)(
@@ -108,6 +93,7 @@ def object_example_4(_):
     Some: x-> console.write(x), // we could exclude this branch
     None: console.write("empty")
   } in
+  let force _ = console.write(stdlib.Iter(my_list)) in
   // print 5
   fourth(Iter(List.Has(2)(my_list))){
     Some: x-> console.write(x),
