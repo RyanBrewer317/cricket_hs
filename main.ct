@@ -100,8 +100,13 @@ def object_example_4(_):
 
 import stdlib/Maybe
 
-def backpassing_example(_):
-  // using the `let <-` notation for some monadic fun
+def backpassing_example_1(_):
+  // use the `let <-` notation ("backpassing") to print 1
+  let x <- f-> f("Cricket is cool!")
+  in console.write(x)
+
+def backpassing_example_2(_):
+  // use backpassing for some monadic fun
   let do = mb_x-> f-> mb_x{Some: x->f(x), None: Maybe.None}
   in let return = Maybe.Some
   in let x <- do(Maybe.Some(7))
@@ -120,7 +125,8 @@ def main(_):
   in let force _ = object_example_2{} // print "hi!" twice
   in let force _ = object_example_3{} // print "Cooper says: woof!"
   in let force _ = object_example_4{} // print "empty" then 5
-  in let force _ = backpassing_example{} // print 7
+  in let force _ = backpassing_example_1{} // print "Cricket is cool!"
+  in let force _ = backpassing_example_2{} // print 7
   in console.write("All examples finished!")
 
 
