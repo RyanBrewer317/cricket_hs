@@ -65,7 +65,7 @@ executable cricket
     main-is:          Main.hs
 
     -- Modules included in this executable, other than Main.
-    -- other-modules:
+    other-modules:    Common, Parse, Translate, Eval
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
