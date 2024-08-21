@@ -1,26 +1,30 @@
 module Main (main) where
 import qualified Data.Map as Map
 import Data.Functor (($>))
-import Data.List (intercalate)
+import Data.List (intercalate, isSuffixOf)
 import Data.Foldable (foldl')
 import System.Environment (getArgs)
 import Data.Fixed (mod')
 import Data.Char (isAlpha, isDigit)
 import Data.Either (partitionEithers)
+import Debug.Trace (trace)
+
+class Pretty a where
+  pretty :: a -> String
 
 data Pos = Pos String Int Int deriving Show
 
 newtype Parser a = Parser { run :: Maybe String -> Pos -> String -> Either String (a, Pos, String) }
 
 prettyParseError :: Pos -> Maybe String -> String -> String
-prettyParseError (Pos srcName line col) expected msg = 
+prettyParseError (Pos srcName line col) expected msg =
   "Parse error. " ++ msg ++ " in `" ++ srcName ++ "` at " ++ show line ++ ":" ++ show col ++ "."
   ++ case expected of
     Just s -> " Expected " ++ s ++ "."
     Nothing -> ""
 
 prettyRuntimeError :: Pos -> String -> String
-prettyRuntimeError (Pos srcName line col) msg = 
+prettyRuntimeError (Pos srcName line col) msg =
   "Runtime error. " ++ msg ++ ". In `" ++ srcName ++ "` at " ++ show line ++ ":" ++ show col ++ "."
 
 (?) :: Parser a -> String -> Parser a
@@ -30,7 +34,7 @@ position :: Parser Pos
 position = Parser $ \_ pos src -> Right (pos, pos, src)
 
 satisfy :: (Char -> Bool) -> Parser Char
-satisfy p = Parser $ \expected (Pos srcName line col) src -> 
+satisfy p = Parser $ \expected (Pos srcName line col) src ->
   case src of
     c:rest | c == '\n' && p c -> Right (c, Pos srcName (line + 1) 0, rest)
     c:rest | p c -> Right (c, Pos srcName line (col + 1), rest)
@@ -141,7 +145,24 @@ data Syntax = LambdaSyntax Pos String Syntax
             | OperatorSyntax Pos Syntax String Syntax
             | StringSyntax Pos String
             | FloatSyntax Pos Float
+            | ModuleSyntax Pos [(String, String, Syntax)]
             deriving Show
+
+instance Pretty Syntax where
+  pretty stx = case stx of
+    LambdaSyntax _ x e -> x ++ "-> " ++ pretty e
+    IdentSyntax _ s -> s
+    AppSyntax _ f a -> "(" ++ pretty f ++ ")(" ++ pretty a ++ ")"
+    IntSyntax _ i -> show i
+    LetSyntax _ True x val scope -> "let force " ++ x ++ " = " ++ pretty val ++ " in " ++ pretty scope
+    LetSyntax _ False x val scope -> "let " ++ x ++ " = " ++ pretty val ++ " in " ++ pretty scope
+    ObjectSyntax _ methods -> "{" ++ intercalate ", " (map (\(s,m,e)->s++"."++m++": "++pretty e) methods) ++ "}"
+    AccessSyntax _ ob method -> pretty ob ++ "." ++ method
+    UpdateSyntax _ ob self method val -> "(" ++ pretty ob ++ ") <- " ++ self ++ "." ++ method ++ ": " ++ pretty val
+    OperatorSyntax _ lhs op rhs -> pretty lhs ++ " " ++ op ++ " " ++ pretty rhs
+    StringSyntax _ s -> "\"" ++ s ++ "\""
+    FloatSyntax _ f -> show f
+    ModuleSyntax _ methods -> "{" ++ intercalate ", " (map (\(s,m,e)->s++"."++m++": "++pretty e) methods) ++ "}"
 
 parseIdentOrLambda :: Parser Syntax
 parseIdentOrLambda = do
@@ -308,80 +329,125 @@ parseImport :: Parser (Either (String, Syntax) String)
 parseImport = do
   _ <- exact "import" ? "an import statement"
   _ <- whitespace
-  Right <$> identString ? "a module name" <* whitespace0
+  name <- identString ? "a module name" <* whitespace0
+  return $ Right name
 
-parseFile :: Parser ([(String, Syntax)], [String])
-parseFile = fmap partitionEithers $ many $ whitespace0 *> oneOf [parseFuncOrObjDecl, parseImport] ? "a declaration" <* whitespace0
+parseFile :: Parser (Map.Map String Syntax, [String])
+parseFile = do
+  let parser = many $ whitespace0 *> oneOf [parseFuncOrObjDecl, parseImport] ? "a declaration" <* whitespace0
+  (decls, imports) <- fmap partitionEithers parser
+  return (Map.fromList decls, imports)
 
 data Term = Lambda Pos String Term
           | Ident Pos Int String
           | App Pos Term Term
           | Int Pos Int
-          | Builtin Pos String
-          | LetForce Pos Term Term
-          | Object Pos (Map.Map String Term)
+          | LetForce Pos String Term Term
+          | Object Pos (Map.Map String (String, Term))
           | Access Pos Term String
-          | Update Pos Term String Term
+          | Update Pos Term String String Term
           | Operator Pos Term String Term
           | String Pos String
           | Float Pos Float
+          | InEnv Term Env
           deriving Show
 
-translate :: Int -> Map.Map String Int -> Syntax -> Term
-translate index renames t = case t of
-      LambdaSyntax p param body ->
-        let body2 = translate (index + 1) (Map.insert param index renames) body in
-        Lambda p param body2
-      IdentSyntax p name ->
-        case Map.lookup name renames of
-          Just i -> Ident p (index - i - 1) name
-          Nothing -> Builtin p name
-      AppSyntax p foo bar ->
-        let foo2 = translate index renames foo in
-        let bar2 = translate index renames bar in
-        App p foo2 bar2
-      IntSyntax p i -> Int p i
-      LetSyntax p True ident val scope ->
-        let val2 = translate index renames val in
-        let scope2 = translate (index + 1) (Map.insert ident index renames) scope in
-        LetForce p val2 scope2
-      LetSyntax p False ident val scope -> translate index renames $ AppSyntax p (LambdaSyntax p ident scope) val
-      ObjectSyntax p methods ->
-        let methods2 = foldr (\(self, method, def) so_far->
-                let def2 = translate (index + 1) (Map.insert self index renames) def in
-                Map.insert method def2 so_far
-              ) Map.empty methods in
-        Object p methods2
-      AccessSyntax p object method ->
-        let object2 = translate index renames object in
-        Access p object2 method
-      UpdateSyntax p object self method def ->
-        let object2 = translate index renames object in
-        let def2 = translate (index + 1) (Map.insert self index renames) def in
-        Update p object2 method def2
-      OperatorSyntax p lhs op rhs ->
-        let lhs2 = translate index renames lhs in
-        let rhs2 = translate index renames rhs in
-        Operator p lhs2 op rhs2
-      StringSyntax p s -> String p s
-      FloatSyntax p f -> Float p f
+translate :: String -> Int -> Map.Map String Int -> Syntax -> Term
+translate mod_name index renames t = 
+  let tr = translate mod_name in
+  case t of
+    LambdaSyntax p param body ->
+      -- trace (":lambda " ++ show p) $
+      -- trace (show renames) $
+      let body2 = tr (index + 1) (Map.insert param index renames) body in
+      Lambda p param body2
+    IdentSyntax p ('#':name) -> 
+      -- trace (":builtin " ++ show p) $ 
+      -- trace (show renames) $
+      Ident p 0 $ '#':name
+    IdentSyntax p name ->
+      -- trace (":ident " ++ name ++ " " ++ show p ++ " " ++ show index) $
+      -- trace (show renames) $
+      case Map.lookup name renames of
+        Just i -> Ident p (index - i - 1) name
+        Nothing ->
+          let t2 = AccessSyntax p (IdentSyntax p mod_name) name in
+          tr index renames t2
+    AppSyntax p foo bar ->
+      -- trace (":app " ++ show p) $
+      -- trace (show renames) $
+      let foo2 = tr index renames foo in
+      let bar2 = tr index renames bar in
+      App p foo2 bar2
+    IntSyntax p i -> 
+      -- trace (":int " ++ show p) $ 
+      -- trace (show renames)
+      Int p i
+    LetSyntax p True ident val scope ->
+      -- trace (":let force " ++ show p) $
+      -- trace (show renames) $
+      let val2 = tr index renames val in
+      let scope2 = tr (index + 1) (Map.insert ident index renames) scope in
+      LetForce p ident val2 scope2
+    LetSyntax p False ident val scope -> 
+      -- trace (":let " ++ show p) $
+      -- trace (show renames) $
+      tr index renames $ AppSyntax p (LambdaSyntax p ident scope) val
+    ObjectSyntax p methods ->
+      -- trace (":object " ++ show p) $
+      -- trace (show renames) $
+      let methods2 = foldr (\(self, method, def) so_far->
+              let def2 = tr (index + 1) (Map.insert self index renames) def in
+              Map.insert method (self, def2) so_far
+            ) Map.empty methods in
+      Object p methods2
+    ModuleSyntax p methods ->
+      -- trace (":module " ++ show p) $
+      -- trace (show renames) $
+      let methods2 = foldr (\(self, method, def) so_far->
+              let def2 = translate self (index + 1) (Map.insert self index renames) def in
+              Map.insert method (self, def2) so_far
+            ) Map.empty methods in
+      Object p methods2
+    AccessSyntax p object method ->
+      -- trace (":access " ++ method ++ " " ++ show p) $
+      -- trace (show renames) $
+      let object2 = tr index renames object in
+      Access p object2 method
+    UpdateSyntax p object self method def ->
+      -- trace (":update " ++ show p) $
+      -- trace (show renames) $
+      let object2 = tr index renames object in
+      let def2 = tr (index + 1) (Map.insert self index renames) def in
+      Update p object2 self method def2
+    OperatorSyntax p lhs op rhs ->
+      -- trace (":operator " ++ show p) $
+      -- trace (show renames) $
+      let lhs2 = tr index renames lhs in
+      let rhs2 = tr index renames rhs in
+      Operator p lhs2 op rhs2
+    StringSyntax p s -> 
+      -- trace (":string " ++ show p) $ 
+      -- trace (show renames) $
+      String p s
+    FloatSyntax p f -> 
+      -- trace (":float " ++ show p) $ 
+      trace (show renames) $
+      Float p f
 
-translateDecl :: Int -> Map.Map String Int -> (String, Syntax) -> (String, Term)
-translateDecl index renames decl = case decl of
-  (foo, body) ->
-    let body2 = translate (index + 1) (Map.insert foo index renames) body in
-    (foo, body2)
+-- translateDecl :: String -> Int -> Map.Map String Int -> (String, Syntax) -> (String, Term)
+-- translateDecl mod_name index renames decl = case decl of
+--   (foo, body) ->
+--     let body2 = translate mod_name index renames body in
+--     (foo, body2)
 
-translateFile :: [(String, Syntax)]-> Map.Map String Term
-translateFile decls =
-  let decls2 = foldr (\decl so_far->
-          let (name, def) = translateDecl 0 Map.empty decl in
-          Map.insert name def so_far
-        ) Map.empty decls in
-  decls2
-
-class Pretty a where
-  pretty :: a -> String
+-- translateFile :: String -> Map.Map String Syntax -> Term
+-- translateFile mod_name decls =
+--   let decls2 = foldr (\decl so_far->
+--           let (name, def) = translateDecl mod_name 1 (Map.fromList [(mod_name, 0)]) decl in
+--           Map.insert name (mod_name, def) so_far
+--         ) Map.empty (Map.toList decls) in
+--   Object (Pos mod_name 1 1) decls2
 
 instance Pretty Term where
   pretty term = case term of
@@ -389,14 +455,14 @@ instance Pretty Term where
     Ident _ _ s -> s
     App _ foo bar -> "(" ++ pretty foo ++ ")(" ++ pretty bar ++ ")"
     Int _ i -> show i
-    Builtin _ name -> name
-    LetForce _ val scope -> "force(" ++ pretty val ++ "): " ++ pretty scope
-    Object _ methods -> "{" ++ intercalate ", " (map (\(m,t)->"this."++m++": "++pretty t) $ Map.toList methods) ++ "}"
+    LetForce _ x val scope -> "let force " ++ x ++ " = " ++ pretty val ++ " in " ++ pretty scope
+    Object _ methods -> "{" ++ intercalate ", " (map (\(m,(s,t))->s++"."++m++": "++pretty t) $ Map.toList methods) ++ "}"
     Access _ t method -> pretty t ++ "." ++ method
-    Update _ t method new -> pretty t ++ " <- this." ++ method ++ ": " ++ pretty new
+    Update _ t self method new -> pretty t ++ " <- " ++ self ++ "." ++ method ++ ": " ++ pretty new
     Operator _ lhs op rhs -> pretty lhs ++ " " ++ op ++ " " ++ pretty rhs
     String _ s -> "\"" ++ s ++ "\""
     Float _ f -> show f
+    InEnv t _ -> pretty t
 
 newtype Env = Env [(Term, Env)] deriving Show
 
@@ -411,146 +477,171 @@ newtype Stack = Stack [(Term, Env)] deriving Show
 instance Pretty Stack where
   pretty (Stack l) = pretty (Env l)
 
-normalize :: Map.Map String Term -> Term -> Map.Map String (Map.Map String Term) -> IO (Either String Term)
-normalize d t mods = do
-  result <- go d t (Stack []) (Env [])
-  return $ case result of
-    Right (out, _, _) -> Right out
-    Left err -> Left err
-  where
-    go decls term s@(Stack stack) e@(Env env) = do
-      -- putStrLn $ pretty term ++ " ; " ++ pretty s ++ "; " ++ pretty e ++ "."
-      case term of
-        Lambda _ _ body ->
-          case stack of
-            arg:rest -> go decls body (Stack rest) (Env (arg:env))
-            [] -> return $ Right (term, s, e)
-        Ident p 0 name ->
-          case env of
-            (def, new_env):_ -> go decls def s new_env
-            [] -> return $ Left $ prettyRuntimeError p $ "Undefined identifer `" ++ name ++ "`"
-        Ident p n name -> 
-          case env of
-            _:rest -> go decls (Ident p (n - 1) name) s (Env rest)
-            [] -> return $ Left $ prettyRuntimeError p $ "Undefined identifier `" ++ name ++ "`"
-        App _ foo bar ->
-          go decls foo (Stack $ (bar, e):stack) e
-        Int _ _ -> return $ Right (term, s, e)
-        Builtin p "console" -> return $ Right (Object p $ Map.fromList [("write", Builtin p "$write"), ("read", Builtin p "$read")], s, e)
-        Builtin p "$write" ->
-          case stack of
-            [(arg, arg_env)] -> do
-              result <- go decls arg (Stack []) arg_env
-              case result of
-                Right (normal_form, _, _) -> do
-                  case normal_form of
-                    String _ str -> do
-                      putStrLn str
-                      return $ Right (Int p 0, Stack [], e)
-                    Int _ i -> do
-                      print i
-                      return $ Right (Int p 0, Stack [], e)
-                    Float _ f -> do
-                      print f
-                      return $ Right (Int p 0, Stack [], e)
-                    _ -> return $ Left $ prettyRuntimeError p $ "Can't write `" ++ pretty normal_form ++ "` to the console"
-                Left err -> return $ Left err
-            _ -> return $ Left $ prettyRuntimeError p $ "`console.write` with wrong number of arguments: " ++ show (length stack)
-        Builtin p "$read" ->
-          case stack of
-            [(arg, arg_env)] -> do
-              result <- go decls arg (Stack []) arg_env
-              case result of
-                Right (normal_form, _, _) -> 
-                  case normal_form of
-                    Object _ methods | Map.null methods -> do
-                      str <- getLine
-                      return $ Right (String p str, s, e)
-                    _ -> return $ Left $ prettyRuntimeError p $ "Bad argument for `console.read`: `" ++ pretty normal_form ++ "`"
-                Left err -> return $ Left err
-            _ -> return $ Left $ prettyRuntimeError p $ "`console.read` with wrong number of arguments: " ++ show (length stack)
-        Builtin p name ->
-          case Map.lookup name decls of
-            Just def -> go decls def s (Env [(term, Env [])])
-            Nothing ->
-              case Map.lookup name mods of
-                Just defs -> return $ Right (Object p defs, s, e)
-                Nothing -> return $ Left $ prettyRuntimeError p $ "Unknown global `" ++ name ++ "`"
-        LetForce _ val scope -> do
-          result <- go decls val (Stack []) e
-          case result of
-            Right (normal_form, _, _) -> go decls scope s (Env $ (normal_form, e):env)
-            Left err -> return $ Left err
-        Object _ _ -> return $ Right (term, s, e)
-        Access p ob method -> do
-          result <- go decls ob (Stack []) e
-          case result of
-            Right (normal_form, _, Env ob_env) -> 
-              case normal_form of
-                Object _ methods ->
-                  case Map.lookup method methods of
-                    Just def -> go decls def s (Env $ (normal_form, e):ob_env)
-                    Nothing -> return $ Left $ prettyRuntimeError p $ "Unknown object method `" ++ method ++ "` on `" ++ pretty normal_form ++ "`"
-                _ -> return $ Left $ prettyRuntimeError p $ "Cannot access a non-object `" ++ pretty (Access p normal_form method) ++ "`"
-            Left err -> return $ Left err
-        Update p ob method def -> do
-          result <- go decls ob (Stack []) e
-          case result of
-            Right (normal_form, _, _) -> 
-              case normal_form of
-                Object _ methods ->
-                  return $ Right (Object p $ Map.insert method def methods, s, e)
-                _ -> return $ Left $ prettyRuntimeError p "Cannot update a non-object"
-            Left err -> return $ Left err
-        Operator p lhs op rhs -> do
-          result <- go decls lhs (Stack []) e
-          case result of
-            Right (lhs_nf, _, _) -> do
-              result2 <- go decls rhs (Stack []) e
-              return $ case result2 of
-                Right (rhs_nf, _, _) ->
-                  case (lhs_nf, rhs_nf) of
-                    (Int _ i, Int _ j) ->
-                      case op of
-                        "+" -> Right (Int p $ i + j, s, e)
-                        "-" -> Right (Int p $ i - j, s, e)
-                        "*" -> Right (Int p $ i * j, s, e)
-                        "/" -> Right (Int p $ div i j, s, e)
-                        "%" -> Right (Int p $ mod i j, s, e)
-                        _ -> Left $ prettyRuntimeError p $ "Unknown operator `" ++ op ++ "` for integers."
-                    (String _ a, String _ b) -> 
-                      case op of
-                        "+" -> Right (String p $ a ++ b, s, e)
-                        _ -> Left $ prettyRuntimeError p $ "Unknown operator `" ++ op ++ "` for strings."
-                    (Float _ a, Float _ b) -> 
-                      case op of
-                        "+" -> Right (Float p $ a + b, s, e)
-                        "-" -> Right (Float p $ a - b, s, e)
-                        "*" -> Right (Float p $ a * b, s, e)
-                        "/" -> Right (Float p $ a / b, s, e)
-                        "%" -> Right (Float p $ mod' a b, s, e)
-                        _ -> Left $ prettyRuntimeError p $ "Unknown operator `" ++ op ++ "` for floats."
-                    _ -> Left $ prettyRuntimeError p $ "Operator `" ++ op ++ "` unknown or applied to values of the wrong types: `" ++ pretty lhs_nf ++ "`, `" ++ pretty rhs ++ "`"
-                Left err -> Left err
-            Left err -> return $ Left err
-        String _ _ -> return $ Right (term, s, e)
-        Float _ _ -> return $ Right (term, s, e)
+newtype EitherIO a b = EIO {getEIO :: IO (Either a b)}
 
-processImport :: String -> IO (Either String (Map.Map String (Map.Map String Term)))
-processImport srcName = do
-  src <- readFile $ srcName ++ ".ct"
-  case run parseFile Nothing (Pos srcName 1 1) src of
-    Left err -> return $ Left err
-    Right ((decls, imports), _, "") -> do
-      eithers <- mapM processImport imports
-      let (errors, successes) = partitionEithers eithers
-      return $ case errors of
-        err:_ -> Left err
-        [] ->
-          let modules = foldr Map.union Map.empty successes in
-          let decls2 = translateFile decls in
-          Right $ Map.insert srcName decls2 modules
-    Right (_, p, c:_) -> return $ Left $ prettyRuntimeError p $ "Unexpected `" ++ c:"`"
+instance Functor (EitherIO a) where
+  fmap f (EIO eio) = EIO $ do
+    e <- eio
+    case e of
+      Left a -> return $ Left a
+      Right b -> return $ Right $ f b
+
+instance Applicative (EitherIO a) where
+  pure b = EIO $ return $ return b
+  (EIO eiof) <*> (EIO eiob) = EIO $ do
+    ef <- eiof
+    eb <- eiob
+    return $ case (ef, eb) of
+      (Left a, _) -> Left a
+      (_, Left a) -> Left a
+      (Right f, Right b) -> Right $ f b
+
+instance Monad (EitherIO a) where
+  return = pure
+  (EIO eioa) >>= eiof = EIO $ do
+    ea <- eioa
+    case ea of
+      Left a -> return $ Left a
+      Right b -> getEIO $ eiof b
+
+lift :: IO b -> EitherIO a b
+lift io = EIO $ Right <$> io
+
+left :: a -> EitherIO a b
+left = EIO . return . Left
+
+normalize :: Term -> IO (Either String Term)
+normalize t = getEIO $ do
+  (out, _, _) <- go t (Stack []) (Env [])
+  return out
+  where
+    go term s@(Stack stack) e@(Env env) = do
+      -- putStrLn $ pretty term ++ " ; " ++ pretty s ++ "; " ++ pretty e ++ "."
+      -- putStrLn $ pretty term
+      -- putStrLn $ pretty e
+      case term of
+        Lambda _ _ body -> do
+          case stack of
+            arg:rest -> go body (Stack rest) (Env (arg:env))
+            [] -> return (term, s, e)
+        Ident p _ "#console_write" -> do
+          case stack of
+            [(arg, arg_env)] -> do
+              (normal_form, _, _) <- go arg (Stack []) arg_env
+              case normal_form of
+                String _ str -> do
+                  lift $ putStrLn str
+                  return (Int p 0, Stack [], e)
+                Int _ i -> do
+                  lift $ print i
+                  return (Int p 0, Stack [], e)
+                Float _ f -> do
+                  lift $ print f
+                  return (Int p 0, Stack [], e)
+                _ -> left $ prettyRuntimeError p $ "Can't write `" ++ pretty normal_form ++ "` to the console."
+            _ -> left $ prettyRuntimeError p $ "`console.write` with wrong number of arguments: " ++ show (length stack)
+        Ident p _ "#console_read" -> do
+          case stack of
+            (arg, arg_env):_ -> do
+              (normal_form, _, _) <- go arg (Stack []) arg_env
+              case normal_form of
+                Object _ methods | Map.null methods -> do
+                  str <- lift getLine
+                  return (String p str, s, e)
+                _ -> left $ prettyRuntimeError p $ "Bad argument for `console.read`: `" ++ pretty normal_form ++ "`"
+            [] -> return (Lambda p "x" (App p (Ident p 0 "#console_read") (Ident p 0 "x")), s, e)
+        Ident p 0 name -> do
+          case env of
+            (def, new_env):_ -> 
+              -- trace (name ++ " = " ++ pretty def) $
+              go def s new_env
+            [] -> left $ prettyRuntimeError p $ "Undefined identifer `" ++ name ++ "`"
+        Ident p n name -> do
+          case env of
+            _:rest -> go (Ident p (n - 1) name) s (Env rest)
+            [] -> left $ prettyRuntimeError p $ "Undefined identifier `" ++ name ++ "`"
+        App _ foo bar -> do
+          go foo (Stack $ (bar, e):stack) e
+        Int _ _ -> return (term, s, e)
+        LetForce _ _ val scope -> do
+          (normal_form, _, nf_env) <- go val (Stack []) e
+          go scope s (Env $ (normal_form, nf_env):env)
+        Object p methods -> do
+          -- lift $ putStrLn "OBJECT"
+          -- lift $ putStrLn $ pretty e
+          return (Object p $ Map.map (\(self,v)->(self,InEnv v (Env $ (term,e):env))) methods, s, e)
+        Access p ob method -> do
+          (normal_form, _, ob_env) <- go ob (Stack []) e
+          case normal_form of
+            Object _ methods ->
+              case Map.lookup method methods of
+                Just (_self, def) -> go def s (Env $ (normal_form, ob_env):env)
+                Nothing -> left $ prettyRuntimeError p $ "Unknown object method `" ++ method ++ "` on `" ++ pretty normal_form ++ "`"
+            _ -> left $ prettyRuntimeError p $ "Cannot access a non-object `" ++ pretty (Access p normal_form method) ++ "`"
+        Update p ob self method def -> do
+          (normal_form, _, _) <- go ob (Stack []) e
+          case normal_form of
+            Object _ methods ->
+              return (Object p $ Map.insert method (self, InEnv def e) methods, s, e)
+            _ -> left $ prettyRuntimeError p "Cannot update a non-object"
+        Operator p lhs op rhs -> do
+          (lhs_nf, _, _) <- go lhs (Stack []) e
+          (rhs_nf, _, _) <- go rhs (Stack []) e
+          EIO $ return $ case (lhs_nf, rhs_nf) of
+            (Int _ i, Int _ j) ->
+              case op of
+                "+" -> Right (Int p $ i + j, s, e)
+                "-" -> Right (Int p $ i - j, s, e)
+                "*" -> Right (Int p $ i * j, s, e)
+                "/" -> Right (Int p $ div i j, s, e)
+                "%" -> Right (Int p $ mod i j, s, e)
+                _ -> Left $ prettyRuntimeError p $ "Unknown operator `" ++ op ++ "` for integers."
+            (String _ a, String _ b) ->
+              case op of
+                "+" -> Right (String p $ a ++ b, s, e)
+                _ -> Left $ prettyRuntimeError p $ "Unknown operator `" ++ op ++ "` for strings."
+            (Float _ a, Float _ b) ->
+              case op of
+                "+" -> Right (Float p $ a + b, s, e)
+                "-" -> Right (Float p $ a - b, s, e)
+                "*" -> Right (Float p $ a * b, s, e)
+                "/" -> Right (Float p $ a / b, s, e)
+                "%" -> Right (Float p $ mod' a b, s, e)
+                _ -> Left $ prettyRuntimeError p $ "Unknown operator `" ++ op ++ "` for floats."
+            _ -> Left $ prettyRuntimeError p $ "Operator `" ++ op ++ "` unknown or applied to values of the wrong types: `" ++ pretty lhs_nf ++ "`, `" ++ pretty rhs ++ "`"
+        String _ _ -> do
+          return (term, s, e)
+        Float _ _ -> do
+          return (term, s, e)
+        InEnv new_t new_env -> go new_t s new_env
+
+processImport :: String -> EitherIO String (String, String, Syntax)
+processImport mod_name = do
+  let pos = Pos mod_name 1 1
+  src <- lift $ readFile $ mod_name ++ ".ct"
+  ((decls, imports), pos2, rest) <- EIO $ return $ run parseFile Nothing pos src
+  case rest of
+    "" -> return ()
+    c:_ -> left $ prettyRuntimeError pos2 $ "Unexpected `" ++ c:"`"
+  mods <- mapM processImport imports
+  let ob = ModuleSyntax pos $ mods ++ map (\(a,b)->('$':mod_name,a,b)) (Map.toList $ Map.union (builtins pos) decls)
+  return ('$':mod_name, mod_name, ob)
+
+removeSuffix :: String -> String -> String
+removeSuffix sub s =
+  let rev = reverse s in
+  if sub `isSuffixOf` s then
+    reverse (drop (length sub) rev)
+  else
+    s
+
+builtins :: Pos -> Map.Map String Syntax
+builtins pos = Map.fromList
+  [ ("console", ObjectSyntax pos
+    [ ("", "write", IdentSyntax pos "#console_write")
+    , ("", "read", IdentSyntax pos "#console_read")
+    ])
+  ]
 
 main :: IO ()
 main = do
@@ -558,30 +649,29 @@ main = do
   case args of
     [] -> do
       src <- getLine
-      case run parseTerm Nothing (Pos "input" 1 1) src of
+      let pos = Pos "input" 1 1
+      case run parseTerm Nothing pos src of
         Left err -> putStrLn err
         Right (t, _, "") -> do
-          let t2 = translate 0 Map.empty t
-          _ <- normalize Map.empty t2 Map.empty
-          return ()
-        Right (_, pos, c:_) -> putStrLn $ prettyParseError pos Nothing $ "unexpected `" ++ c:"`"
+          let t2 = translate "input" 0 Map.empty $ ObjectSyntax pos $ map (\(a,b)->("$input",a,b)) (Map.toList $ builtins pos) ++ [("$input", "main", t)]
+          print t2
+          res <- normalize $ Access pos t2 "main"
+          case res of
+            Left err -> putStrLn err
+            Right _ -> return ()
+        Right (_, p, c:_) -> putStrLn $ prettyParseError p Nothing $ "unexpected `" ++ c:"`"
     filename:_ -> do
-      src <- readFile filename
-      case run parseFile Nothing (Pos filename 1 1) src of
+      let pos = Pos filename 1 1
+      let mod_name = removeSuffix ".ct" filename
+      mb_t <- getEIO $ processImport mod_name
+      case mb_t of
         Left err -> putStrLn err
-        Right ((decls, imports), _, "") -> do
-          eithers <- mapM processImport imports
-          let (errors, successes) = partitionEithers eithers
-          case errors of
-            err:_ -> putStrLn err
-            [] -> do
-              let mods = foldr Map.union Map.empty successes
-              let decls2 = translateFile decls
-              case Map.lookup "main" decls2 of
-                Just (Lambda _ _ entry) -> do
-                  result <- normalize decls2 entry mods
-                  case result  of
-                    Left err -> putStrLn err
-                    Right _ -> return ()
-                _ -> putStrLn $ "Error. No `main` function in `" ++ filename ++ "`."
-        Right (_, pos, c:_) -> putStrLn $ prettyParseError pos (Just "a declaration") $ "Unexpected `" ++ c:"`"
+        Right (_, _, t) -> do
+          -- putStrLn $ pretty t
+          let t2 = translate mod_name 0 Map.empty t
+          -- putStrLn $ pretty t2
+          let entry = App pos (Access pos t2 "main") (Object pos Map.empty)
+          result <- normalize entry
+          case result of
+            Left err -> putStrLn err
+            Right _ -> return ()
