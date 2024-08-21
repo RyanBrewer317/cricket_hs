@@ -323,7 +323,7 @@ parseTerm = do
   _ <- whitespace0
   return out
 
-parseFuncOrObjDecl :: Parser (Either (String, Syntax) String)
+parseFuncOrObjDecl :: Parser (Either (String, Syntax) [String])
 parseFuncOrObjDecl = do
   p <- position
   _ <- exact "def" ? "a global declaration"
@@ -350,14 +350,14 @@ parseFuncOrObjDecl = do
       let body2 = foldr (LambdaSyntax p) body params
       return $ Left (name, body2)
 
-parseImport :: Parser (Either (String, Syntax) String)
+parseImport :: Parser (Either (String, Syntax) [String])
 parseImport = do
   _ <- exact "import" ? "an import statement"
   _ <- whitespace
-  name <- identString ? "a module name" <* whitespace0
+  name <- sepBy (char '/') identString ? "a module name" <* whitespace0
   return $ Right name
 
-parseFile :: Parser (Map.Map String Syntax, [String])
+parseFile :: Parser (Map.Map String Syntax, [[String]])
 parseFile = do
   let parser = many $ whitespace0 *>
         oneOf [parseFuncOrObjDecl, parseImport] ? "a declaration" <* whitespace0
@@ -631,10 +631,11 @@ normalize t = getEIO $ do
           return (term, s, e)
         InEnv new_t new_env -> go new_t s new_env
 
-processImport :: String -> EitherIO String (String, String, Syntax)
-processImport mod_name = do
+processImport :: [String] -> EitherIO String (String, String, Syntax)
+processImport mod_path = do
+  let mod_name = last mod_path
   let pos = Pos mod_name 1 1
-  src <- lift $ readFile $ mod_name ++ ".ct"
+  src <- lift $ readFile $ intercalate "/" mod_path ++ ".ct"
   ((decls, imports), pos2, rest) <- EIO $ return $ run parseFile Nothing pos src
   case rest of
     "" -> return ()
@@ -672,25 +673,25 @@ main = do
       case run parseTerm Nothing pos src of
         Left err -> putStrLn err
         Right (t, _, "") -> do
-          mb_t <- getEIO $ processImport "stdlib"
+          mb_t <- getEIO $ processImport ["stdlib"]
           let stdlib = case mb_t of
                 Right x -> x
                 _ -> error "internal error"
           let mod_methods = Map.toList $ Map.insert "main" t $ builtins pos
-          let ob = ModuleSyntax pos "input" $ 
+          let ob = ModuleSyntax pos "input" $
                 stdlib : map (\(a,b)->("$input",a,b)) mod_methods
           let t2 = translate "input" 0 Map.empty ob
           res <- normalize $ Access pos t2 "main"
           case res of
             Left err -> putStrLn err
             Right _ -> return ()
-        Right (_, p, c:_) -> 
-          putStrLn $ 
+        Right (_, p, c:_) ->
+          putStrLn $
             prettyParseError p Nothing $ "unexpected `" ++ c:"`"
     filename:_ -> do
       let pos = Pos filename 1 1
       let mod_name = removeSuffix ".ct" filename
-      mb_t <- getEIO $ processImport mod_name
+      mb_t <- getEIO $ processImport [mod_name]
       case mb_t of
         Left err -> putStrLn err
         Right (_, _, t) -> do

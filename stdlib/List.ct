@@ -1,0 +1,6 @@
+def Empty(case):
+  case.Empty
+
+def Has(case):
+  case.Has
+

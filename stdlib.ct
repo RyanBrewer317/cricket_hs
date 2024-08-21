@@ -1,12 +1,6 @@
-def Maybe {
-  Some: x-> case-> case.Some(x), 
-  None: case-> case.None
-}
+import stdlib/Maybe
 
-def List {
-  Empty: case-> case.Empty, 
-  Has: first-> rest-> case-> case.Has(first)(rest)
-}
+import stdlib/List
 
 def Iter(l):
   l{

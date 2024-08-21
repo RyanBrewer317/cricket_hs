@@ -1,0 +1,5 @@
+def Some(case):
+  case.Some
+
+def None(case):
+  case.None
