@@ -98,10 +98,16 @@ def object_example_4(_):
     None: console.write("empty") // we could exclude this branch
   }
 
+import stdlib/Maybe
+
 def backpassing_example(_):
+  // using the `let <-` notation for some monadic fun
+  let do = mb_x-> f-> mb_x{Some: x->f(x), None: Maybe.None}
+  in let return = Maybe.Some
+  in let x <- do(Maybe.Some(7))
   // prints 7
-  let x <- callback->callback(7)
-  in console.write(x)
+  in let force _ = console.write(x)
+  in return(0)
 
 def main(_):
   let force _ = laziness_example_1{} // print 1 then 2
