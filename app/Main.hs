@@ -14,10 +14,11 @@ import Translate
 import Eval
 
 processImport :: [String] -> EitherIO String (String, String, Syntax)
-processImport mod_path = do
-  let mod_name = last mod_path
-  let pos = Pos mod_name 1 1
-  src <- lift $ readFile $ intercalate "/" mod_path ++ ".ct"
+processImport mod_path_segments = do
+  let mod_name = last mod_path_segments
+  let mod_path = intercalate "/" mod_path_segments
+  let pos = Pos mod_path 1 1
+  src <- lift $ readFile $ mod_path ++ ".ct"
   ((decls, imports), pos2, rest) <- EIO $ return $ run parseFile Nothing pos src
   case rest of
     "" -> return ()

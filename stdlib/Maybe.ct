@@ -1,5 +1,5 @@
-def Some(case):
-  case.Some
+def Some(x)(case):
+  case.Some(x)
 
 def None(case):
   case.None

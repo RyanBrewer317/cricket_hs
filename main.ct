@@ -98,6 +98,11 @@ def object_example_4(_):
     None: console.write("empty") // we could exclude this branch
   }
 
+def backpassing_example(_):
+  // prints 7
+  let x <- callback->callback(7)
+  in console.write(x)
+
 def main(_):
   let force _ = laziness_example_1{} // print 1 then 2
   in let force _ = laziness_example_2{} // print "b"
@@ -109,6 +114,7 @@ def main(_):
   in let force _ = object_example_2{} // print "hi!" twice
   in let force _ = object_example_3{} // print "Cooper says: woof!"
   in let force _ = object_example_4{} // print "empty" then 5
+  in let force _ = backpassing_example{} // print 7
   in console.write("All examples finished!")
 
 
