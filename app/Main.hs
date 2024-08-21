@@ -142,11 +142,13 @@ escaped = do
     'r' -> return '\r'
     _ -> return c
 
+data LetType = Basic | Force | Back deriving Show
+
 data Syntax = LambdaSyntax Pos String Syntax
             | IdentSyntax Pos String
             | AppSyntax Pos Syntax Syntax
             | IntSyntax Pos Int
-            | LetSyntax Pos Bool String Syntax Syntax
+            | LetSyntax Pos LetType String Syntax Syntax
             | ObjectSyntax Pos (Maybe String) [(String, String, Syntax)]
             | AccessSyntax Pos Syntax String
             | UpdateSyntax Pos Syntax String String Syntax
@@ -162,10 +164,12 @@ instance Pretty Syntax where
     IdentSyntax _ s -> s
     AppSyntax _ f a -> "(" ++ pretty f ++ ")(" ++ pretty a ++ ")"
     IntSyntax _ i -> show i
-    LetSyntax _ True x val scope ->
+    LetSyntax _ Force x val scope ->
       "let force " ++ x ++ " = " ++ pretty val ++ " in " ++ pretty scope
-    LetSyntax _ False x val scope ->
+    LetSyntax _ Basic x val scope ->
       "let " ++ x ++ " = " ++ pretty val ++ " in " ++ pretty scope
+    LetSyntax _ Back x val scope ->
+      "let " ++ x ++ " <- " ++ pretty val ++ " in " ++ pretty scope
     ObjectSyntax _ (Just name) _ -> name
     ObjectSyntax _ _ methods -> "{"
       ++ intercalate ", " (map (\(s,m,e)->s++"."++m++": "++pretty e) methods)
@@ -223,17 +227,23 @@ parseLet = do
   _ <- whitespace
   w <- patternString
   _ <- whitespace0
-  (ident, forced) <- case w of
+  (ident, let_type) <- case w of
     "force" -> do
       i <- patternString
-      return (i, True)
-    i -> return (i, False)
-  _ <- whitespace0
-  _ <- char '='
+      _ <- whitespace0
+      _ <- char '='
+      return (i, Force)
+    i -> do
+      _ <- whitespace0
+      op <- oneOf [exact "=", exact "<-"]
+      case op of
+        "=" -> return (i, Basic)
+        "<-" -> return (i, Back)
+        _ -> error "internal error"
   val <- parseTerm
   _ <- exact "in"
   _ <- whitespace
-  LetSyntax p forced ident val <$> parseTerm
+  LetSyntax p let_type ident val <$> parseTerm
 
 parseMethods :: Parser [(String, String, Syntax)]
 parseMethods = sepBy0 (char ',') $ do
@@ -397,12 +407,14 @@ translate mod_name index renames t =
       let bar2 = tr index renames bar in
       App p foo2 bar2
     IntSyntax p i -> Int p i
-    LetSyntax p True ident val scope ->
+    LetSyntax p Force ident val scope ->
       let val2 = tr index renames val in
       let scope2 = tr (index + 1) (Map.insert ident index renames) scope in
       LetForce p ident val2 scope2
-    LetSyntax p False ident val scope ->
+    LetSyntax p Basic ident val scope ->
       tr index renames $ AppSyntax p (LambdaSyntax p ident scope) val
+    LetSyntax p Back ident val scope ->
+      tr index renames $ AppSyntax p val (LambdaSyntax p ident scope)
     ObjectSyntax p mb_name methods ->
       let methods2 = foldr (\(self, method, def) so_far->
               let def2 = tr (index + 1) (Map.insert self index renames) def in
