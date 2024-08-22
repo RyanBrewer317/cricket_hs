@@ -56,8 +56,8 @@ main = do
       case run parseTerm Nothing pos src of
         Left err -> putStrLn err
         Right (t, _, "") -> do
-          mb_t <- getEIO $ processImport ["stdlib"]
-          let stdlib = case mb_t of
+          mb_stdlib <- getEIO $ processImport ["stdlib"]
+          let stdlib = case mb_stdlib of
                 Right x -> x
                 _ -> error "internal error"
           let mod_methods = Map.toList $ Map.insert "main" t $ builtins pos

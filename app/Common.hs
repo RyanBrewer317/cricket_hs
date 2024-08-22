@@ -26,6 +26,21 @@ data Syntax = LambdaSyntax Pos String Syntax
             | ModuleSyntax Pos String [(String, String, Syntax)]
             deriving Show
 
+stxPos :: Syntax -> Pos
+stxPos stx = case stx of
+  LambdaSyntax p _ _ -> p
+  IdentSyntax p _ -> p
+  AppSyntax p _ _ -> p
+  IntSyntax p _ -> p
+  LetForceSyntax p _ _ _ -> p
+  ObjectSyntax p _ _ -> p
+  AccessSyntax p _ _ -> p
+  UpdateSyntax p _ _ _ _ -> p
+  OperatorSyntax p _ _ _ -> p
+  StringSyntax p _ -> p
+  FloatSyntax p _ -> p
+  ModuleSyntax p _ _ -> p
+
 instance Pretty Syntax where
   pretty stx = case stx of
     LambdaSyntax _ x e -> x ++ "-> " ++ pretty e
@@ -38,7 +53,7 @@ instance Pretty Syntax where
     ObjectSyntax _ _ methods -> "{"
       ++ intercalate ", " (map (\(s,m,e)->s++"."++m++": "++pretty e) methods)
       ++ "}"
-    AccessSyntax _ ob method -> pretty ob ++ "." ++ method
+    AccessSyntax _ ob method -> "(" ++ pretty ob ++ ")." ++ method
     UpdateSyntax _ ob self method val ->
       "(" ++ pretty ob ++ ") <- " ++ self ++ "." ++ method ++ ": " ++ pretty val
     OperatorSyntax _ lhs op rhs -> pretty lhs ++ " " ++ op ++ " " ++ pretty rhs
@@ -73,7 +88,7 @@ instance Pretty Term where
       "{" ++ intercalate ", "
         (map (\(m,(s,t))->s++"."++m++": "++pretty t) $ Map.toList methods)
       ++ "}"
-    Access _ t method -> pretty t ++ "." ++ method
+    Access _ t method -> "(" ++ pretty t ++ ")." ++ method
     Update _ t self method new ->
       pretty t ++ " <- " ++ self ++ "." ++ method ++ ": " ++ pretty new
     Operator _ lhs op rhs -> pretty lhs ++ " " ++ op ++ " " ++ pretty rhs

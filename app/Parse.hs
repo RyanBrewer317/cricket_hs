@@ -133,15 +133,29 @@ escaped = do
     'r' -> return '\r'
     _ -> return c
 
-parseIdentOrLambda :: Parser Syntax
-parseIdentOrLambda = do
+parseIdentOrLambdaOrMonoid :: Parser Syntax
+parseIdentOrLambdaOrMonoid = do
   p <- position
   i <- identString ? "an identifier"
   _ <- whitespace0
   mb_arrow <- possible (exact "->")
   case mb_arrow of
     Just _ -> LambdaSyntax p i <$> parseTerm
-    Nothing -> return $ IdentSyntax p i
+    Nothing -> do
+      mb_bracket <- possible (exact "[")
+      case mb_bracket of
+        Just _ -> do
+          terms <- sepBy0 (char ',') parseTerm
+          _ <- char ']'
+          return $ foldr (\term t->
+              let pos = stxPos term in
+              AppSyntax pos 
+                  (AppSyntax pos 
+                      (AccessSyntax p (IdentSyntax p i) "Has") 
+                    term) 
+                t
+            ) (AccessSyntax p (IdentSyntax p i) "Empty") terms
+        Nothing -> return $ IdentSyntax p i
 
 parseConstantLambda :: Parser Syntax
 parseConstantLambda = do
@@ -239,7 +253,7 @@ parseTermNoPostfix = do
     , parseString
     , parseNum
     , parseLet
-    , parseIdentOrLambda
+    , parseIdentOrLambdaOrMonoid
     ]
   _ <- whitespace0
   return t
