@@ -12,13 +12,11 @@ data Pos = Pos String Int Int deriving Show
 class Pretty a where
   pretty :: a -> String
 
-data LetType = Basic | Force | Back deriving Show
-
 data Syntax = LambdaSyntax Pos String Syntax
             | IdentSyntax Pos String
             | AppSyntax Pos Syntax Syntax
             | IntSyntax Pos Int
-            | LetSyntax Pos LetType String Syntax Syntax
+            | LetForceSyntax Pos String Syntax Syntax
             | ObjectSyntax Pos (Maybe String) [(String, String, Syntax)]
             | AccessSyntax Pos Syntax String
             | UpdateSyntax Pos Syntax String String Syntax
@@ -34,12 +32,8 @@ instance Pretty Syntax where
     IdentSyntax _ s -> s
     AppSyntax _ f a -> "(" ++ pretty f ++ ")(" ++ pretty a ++ ")"
     IntSyntax _ i -> show i
-    LetSyntax _ Force x val scope ->
+    LetForceSyntax _ x val scope ->
       "let force " ++ x ++ " = " ++ pretty val ++ " in " ++ pretty scope
-    LetSyntax _ Basic x val scope ->
-      "let " ++ x ++ " = " ++ pretty val ++ " in " ++ pretty scope
-    LetSyntax _ Back x val scope ->
-      "let " ++ x ++ " <- " ++ pretty val ++ " in " ++ pretty scope
     ObjectSyntax _ (Just name) _ -> name
     ObjectSyntax _ _ methods -> "{"
       ++ intercalate ", " (map (\(s,m,e)->s++"."++m++": "++pretty e) methods)

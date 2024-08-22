@@ -26,14 +26,10 @@ translate mod_name index renames t =
       let bar2 = tr index renames bar in
       App p foo2 bar2
     IntSyntax p i -> Int p i
-    LetSyntax p Force ident val scope ->
+    LetForceSyntax p ident val scope ->
       let val2 = tr index renames val in
       let scope2 = tr (index + 1) (Map.insert ident index renames) scope in
       LetForce p ident val2 scope2
-    LetSyntax p Basic ident val scope ->
-      tr index renames $ AppSyntax p (LambdaSyntax p ident scope) val
-    LetSyntax p Back ident val scope ->
-      tr index renames $ AppSyntax p val (LambdaSyntax p ident scope)
     ObjectSyntax p mb_name methods ->
       let methods2 = foldr (\(self, method, def) so_far->
               let def2 = tr (index + 1) (Map.insert self index renames) def in

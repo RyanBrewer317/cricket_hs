@@ -171,11 +171,13 @@ parseString = do
   _ <- char '"'
   return $ StringSyntax p s
 
+data LetType = Force | Basic | Back
+
 parseLet :: Parser Syntax
 parseLet = do
   p <- position
   _ <- exact "let" ? "an identifier declaration"
-  _ <- whitespace
+  _ <- whitespace -- TODO: should be not(oneOf[satisfy isAlpha, satisfy isDigit, char '_'])
   w <- patternString
   _ <- whitespace0
   (ident, let_type) <- case w of
@@ -193,8 +195,12 @@ parseLet = do
         _ -> error "internal error"
   val <- parseTerm
   _ <- exact "in"
-  _ <- whitespace
-  LetSyntax p let_type ident val <$> parseTerm
+  _ <- whitespace -- TODO: should be not(oneOf[satisfy isAlpha, satisfy isDigit, char '_'])
+  scope <- parseTerm
+  return $ case let_type of
+    Force -> LetForceSyntax p ident val scope
+    Basic -> AppSyntax p (LambdaSyntax p ident scope) val
+    Back -> AppSyntax p val (LambdaSyntax p ident scope)
 
 parseMethods :: Parser [(String, String, Syntax)]
 parseMethods = sepBy0 (char ',') $ do
@@ -288,7 +294,7 @@ parseFuncOrObjDecl :: Parser (Either (String, Syntax) [String])
 parseFuncOrObjDecl = do
   p <- position
   _ <- exact "def" ? "a global declaration"
-  _ <- whitespace
+  _ <- whitespace -- TODO: should be not(oneOf[satisfy isAlpha, satisfy isDigit, char '_'])
   name <- identString
   mb_obj <- possible (whitespace0 >> char '{')
   case mb_obj of
@@ -314,7 +320,7 @@ parseFuncOrObjDecl = do
 parseImport :: Parser (Either (String, Syntax) [String])
 parseImport = do
   _ <- exact "import" ? "an import statement"
-  _ <- whitespace
+  _ <- whitespace -- TODO: should be not(oneOf[satisfy isAlpha, satisfy isDigit, char '_'])
   name <- sepBy (char '/') identString ? "a module name" <* whitespace0
   return $ Right name
 
