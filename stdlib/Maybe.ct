@@ -1,5 +1,15 @@
-def Some(x)(case):
-  case.Some(x)
+def Some(x): {
+  case: c-> c.Some(x),
+  map: f-> Some(f(x)),
+  flat: x,
+  default: _-> x,
+  this.none: _ -> this
+}
 
-def None(case):
-  case.None
+def None {
+  case: c-> c.None,
+  map: f-> None,
+  flat: None,
+  default: x-> x,
+  none: x-> x
+}

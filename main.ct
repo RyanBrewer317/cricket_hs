@@ -41,29 +41,23 @@ def laziness_example_5(_):
   in let force _ = console.write(y)
   in console.write(x)
 
+import stdlib/List
+
 def object_example_1(_):
   // a bunch of fun object trickery!
-  let list = {
-    e: case -> case.Empty,
-    p: first-> rest-> case-> case.Has(first)(rest)
-  }
-  in let l = list.p(-0.5)(list.p(-0.6)(list.p(-0.2)(list.e)))
+  let l = List[-0.5, -0.6, -0.2] // monoid syntax
   // print out all the elements
-  in l{
+  in l.case{
     Empty: 0,
     this.Has: first-> rest-> 
       let force _ = console.write(first)
-      in rest(this) // apply this same pattern match to the tail!
+      in rest.case(this) // apply this same pattern match to the tail!
   }
 
 def object_example_2(_):
-  let list = {
-    e: case -> case.Empty,
-    p: first-> rest-> case-> case.Has(first)(rest)
-  }
-  in let stream_of_ones = {this.val: list.p("hi!")(this.val)}.val
-  in stream_of_ones{
-    Has: first-> t-> t{
+  let stream_of_ones = {this.val: List.Has("hi!")(this.val)}.val
+  in stream_of_ones.case{
+    Has: first-> t-> t.case{
       Has: second-> _->
         let force _ = console.write(first)
         in console.write(second)
@@ -75,43 +69,40 @@ def object_example_3(_):
   in let cooper = dog <- name: "Cooper"
   in console.write(cooper.name + " says: " + cooper.bark)
 
-import stdlib
-
 def object_example_4(_):
-  let List = stdlib.List
-  in let Iter = stdlib.Iter
-  in let my_list =
-    List.Has(7)(
-      List.Has(4)(
-        List.Has(5)(List.Empty)
-      )
-    )
+  let Iter = List.Iter
+  in let my_list = List[7, 4, 5]
   in let fourth = it-> it.next.next.next.val
   // print "null"
-  in let force _ = fourth(Iter(my_list)){
+  in let force _ = fourth(Iter(my_list)).case{
     Some: x-> console.write(x), // we could exclude this branch
     None: console.write("empty")
   }
   // print 5
-  in fourth(Iter(List.Has(2)(my_list))){
+  in fourth(Iter(List.Has(2)(my_list))).case{
     Some: x-> console.write(x),
     None: console.write("empty") // we could exclude this branch
   }
-
-import stdlib/Maybe
 
 def backpassing_example_1(_):
   // use the `let <-` notation ("backpassing") to print 1
   let x <- f-> f("Cricket is cool!")
   in console.write(x)
 
+import stdlib
+
 def backpassing_example_2(_):
   // use backpassing for some monadic fun
-  let do = mb_x-> f-> mb_x{Some: x->f(x), None: Maybe.None}
+  let do = stdlib.do
+  in let Maybe = stdlib.Maybe
   in let return = Maybe.Some
   in let x <- do(Maybe.Some(7))
   // prints 7
   in let force _ = console.write(x)
+  in let y <- do(Maybe.None)
+  // this code path is unreachable
+  // so it doesn't print
+  in let force _ = console.write(y)
   in return(0)
 
 def main(_):

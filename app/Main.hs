@@ -23,7 +23,7 @@ processImport mod_path_segments = do
   case rest of
     "" -> return ()
     c:_ -> left $ prettyRuntimeError pos2 $ "Unexpected `" ++ c:"`"
-  mods <- mapM processImport imports
+  mods <- mapM (processImport . (init mod_path_segments ++)) imports
   let mod_methods = Map.toList $ Map.union (builtins pos) decls
   let ob = ModuleSyntax pos mod_name $ mods ++ map (\(a,b)->('$':mod_name,a,b)) mod_methods
   return ('$':mod_name, mod_name, ob)

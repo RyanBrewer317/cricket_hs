@@ -119,11 +119,19 @@ normalize t = getEIO $ do
                 "*" -> Right (Int p $ i * j, s, e)
                 "/" -> Right (Int p $ div i j, s, e)
                 "%" -> Right (Int p $ mod i j, s, e)
+                "==" -> Right (if i == j then true p else false p, s, e)
+                ">" -> Right (if i > j then true p else false p, s, e)
+                "<" -> Right (if i < j then true p else false p, s, e)
+                ">=" -> Right (if i >= j then true p else false p, s, e)
+                "<=" -> Right (if i <= j then true p else false p, s, e)
+                "!=" -> Right (if i /= j then true p else false p, s, e)
                 _ -> Left $ prettyRuntimeError p $
                       "Unknown operator `" ++ op ++ "` for integers."
             (String _ a, String _ b) ->
               case op of
                 "+" -> Right (String p $ a ++ b, s, e)
+                "==" -> Right (if a == b then true p else false p, s, e)
+                "!=" -> Right (if a /= b then true p else false p, s, e)
                 _ -> Left $ prettyRuntimeError p $
                       "Unknown operator `" ++ op ++ "` for strings."
             (Float _ a, Float _ b) ->
@@ -133,6 +141,12 @@ normalize t = getEIO $ do
                 "*" -> Right (Float p $ a * b, s, e)
                 "/" -> Right (Float p $ a / b, s, e)
                 "%" -> Right (Float p $ mod' a b, s, e)
+                "==" -> Right (if a == b then true p else false p, s, e)
+                ">" -> Right (if a > b then true p else false p, s, e)
+                "<" -> Right (if a < b then true p else false p, s, e)
+                ">=" -> Right (if a >= b then true p else false p, s, e)
+                "<=" -> Right (if a <= b then true p else false p, s, e)
+                "!=" -> Right (if a /= b then true p else false p, s, e)
                 _ -> Left $ prettyRuntimeError p $
                       "Unknown operator `" ++ op ++ "` for floats."
             _ -> Left $ prettyRuntimeError p $
@@ -144,3 +158,9 @@ normalize t = getEIO $ do
         Float _ _ -> do
           return (term, s, e)
         InEnv new_t new_env -> go new_t s new_env
+
+true :: Pos -> Term
+true p = Object p (Just "True") $ Map.fromList [("case", ("", Lambda p "c" (Access p (Ident p 0 "c") "True")))]
+
+false :: Pos -> Term
+false p = Object p (Just "False") $ Map.fromList [("case", ("", Lambda p "c" (Access p (Ident p 0 "c") "False")))]

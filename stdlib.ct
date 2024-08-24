@@ -2,14 +2,10 @@ import stdlib/Maybe
 
 import stdlib/List
 
-def Iter(l):
-  l{
-    Empty: {
-      val: Maybe.None,
-      next: Iter(l)
-    },
-    Has: first-> rest-> {
-      val: Maybe.Some(first),
-      next: Iter(rest)
-    }
-  }
+def do(monad)(f):
+  // bind
+  monad.map(f).flat
+
+def sequence(f)(g)(monad):
+  // Kleisli composition
+  f(monad).map(g).flat
