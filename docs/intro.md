@@ -17,9 +17,9 @@ Here's a higher-order function in Cricket:
 def foo(f):
   x-> f(x) + 1
 ```
-`foo` here is a function that takes a function as input.
+`foo` here is a function that takes a function `f` as input.
 It then returns a new function that's the same as the old one
-except its return values are 1 higher.
+except the returned values are 1 higher.
 That is, `foo` only makes sense for functions that return integers.
 `x -> ...` is the notation for a lambda, or anonymous function.
 
@@ -28,7 +28,7 @@ Here's an example of the immutability of Cricket:
 let new_object = (old_object <- p: 7) in ...
 ```
 `<- f:` is the notation for adding a field to an object,
-but notice that it returns a new object, instead of editing the old one.
+but notice that it returns a new object, instead of editing the old one. So `<-` is pronounced "with."
 
 Cricket functions always take exactly one value.
 There are three ways to implement functions of multiple arguments,
@@ -46,9 +46,9 @@ add{p1: 7, p2: 8}
 ```
 A benefit of this approach is that the order of parameters doesn't matter,
 and parameters are labelled at every callsite.
-We can even leave out arguments if we know the function won't use them
+We can even leave out arguments if we know the function won't use them.
 A downside is that this doesn't play well with higher-order functions,
-since they sometimes need to know the names of parameters of functions
+since they often need to know the names of parameters of functions
 so they can call those functions.
 
 The second approach is called "currying," 

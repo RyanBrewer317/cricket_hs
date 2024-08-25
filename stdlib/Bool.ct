@@ -1,8 +1,8 @@
-def True {
+def True: {
   case: c-> c.True
 }
 
-def False {
+def False: {
   case: c-> False
 }
 
@@ -23,7 +23,7 @@ import Maybe
 // case statement with no pattern matching
 // useful for strings and integers, which have no `case` method.
 def switch(scrutinee): {
-  Has: case-> rest-> 
+  Has(case)(rest):
     if(case.case == scrutinee) {
       then: Maybe.Some(case.then),
       else: switch(rest)

@@ -1,8 +1,10 @@
 -- This Source Code Form is subject to the terms of the Mozilla Public
 -- License, v. 2.0. If a copy of the MPL was not distributed with this
 -- file, You can obtain one at https://mozilla.org/MPL/2.0/.
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Avoid lambda" #-}
 
-module Parse where
+module Parse (run, parseFile, parseTerm, prettyParseError) where
 
 import Common
 import qualified Data.Map as Map
@@ -10,6 +12,7 @@ import Data.Either (partitionEithers)
 import Data.Foldable (foldl')
 import Data.Char (isAlpha, isDigit)
 import Data.Functor (($>))
+import Data.Maybe (fromMaybe)
 
 newtype Parser a = Parser {
   run :: Maybe String -> Pos -> String -> Either String (a, Pos, String)
@@ -133,37 +136,24 @@ escaped = do
     'r' -> return '\r'
     _ -> return c
 
-parseIdentOrLambdaOrMonoid :: Parser Syntax
-parseIdentOrLambdaOrMonoid = do
+parseIdentOrLambda :: Parser Syntax
+parseIdentOrLambda = do
   p <- position
   i <- identString ? "an identifier"
   _ <- whitespace0
   mb_arrow <- possible (exact "->")
   case mb_arrow of
     Just _ -> LambdaSyntax p i <$> parseTerm
-    Nothing -> do
-      mb_bracket <- possible (exact "[")
-      case mb_bracket of
-        Just _ -> do
-          terms <- sepBy0 (char ',') parseTerm
-          _ <- char ']'
-          return $ foldr (\term t->
-              let pos = stxPos term in
-              AppSyntax pos 
-                  (AppSyntax pos 
-                      (AccessSyntax p (IdentSyntax p i) "Has") 
-                    term) 
-                t
-            ) (AccessSyntax p (IdentSyntax p i) "Empty") terms
-        Nothing -> return $ IdentSyntax p i
+    Nothing -> return $ IdentSyntax p i
+
 
 parseConstantLambda :: Parser Syntax
 parseConstantLambda = do
   p <- position
-  _ <- char '_' ? "a lambda"
+  s <- patternString ? "a lambda"
   _ <- whitespace0
   _ <- exact "->"
-  LambdaSyntax p "_" <$> parseTerm
+  LambdaSyntax p s <$> parseTerm
 
 parseNum :: Parser Syntax
 parseNum = do
@@ -194,26 +184,35 @@ parseLet = do
   _ <- whitespace -- TODO: should be not(oneOf[satisfy isAlpha, satisfy isDigit, char '_'])
   w <- patternString
   _ <- whitespace0
-  (ident, let_type) <- case w of
+  (ident, let_type, params) <- case w of
     "force" -> do
       i <- patternString
+      mb_params <- possible parseParams
+      let params = fromMaybe [] mb_params
       _ <- whitespace0
       _ <- char '='
-      return (i, Force)
+      return (i, Force, params)
     i -> do
-      _ <- whitespace0
-      op <- oneOf [exact "=", exact "<-"]
-      case op of
-        "=" -> return (i, Basic)
-        "<-" -> return (i, Back)
-        _ -> error "internal error"
+      mb_params <- possible parseParams
+      case mb_params of
+        Just params -> do
+          _ <- whitespace0
+          _ <- char '='
+          return (i, Basic, params)
+        Nothing -> do
+          op <- oneOf [exact "=", exact "<-"]
+          case op of
+            "=" -> return (i, Basic, [])
+            "<-" -> return (i, Back, [])
+            _ -> error "internal error"
   val <- parseTerm
   _ <- exact "in"
   _ <- whitespace -- TODO: should be not(oneOf[satisfy isAlpha, satisfy isDigit, char '_'])
   scope <- parseTerm
+  let val2 = foldr (LambdaSyntax p) val params
   return $ case let_type of
-    Force -> LetForceSyntax p ident val scope
-    Basic -> AppSyntax p (LambdaSyntax p ident scope) val
+    Force -> LetForceSyntax p ident val2 scope
+    Basic -> AppSyntax p (LambdaSyntax p ident scope) val2
     Back -> AppSyntax p val (LambdaSyntax p ident scope)
 
 parseMethods :: Parser [(String, String, Syntax)]
@@ -227,10 +226,14 @@ parseMethods = sepBy0 (char ',') $ do
       return (w, method)
     Nothing -> return ("_", w)
   _ <- whitespace0
+  mb_params <- possible parseParams
   _ <- char ':'
   def <- parseTerm
   _ <- whitespace0
-  return (self, method, def)
+  let def2 = case mb_params of
+        Just params -> foldr (LambdaSyntax (stxPos def)) def params
+        Nothing -> def
+  return (self, method, def2)
 
 parseObject :: Parser Syntax
 parseObject = do
@@ -253,7 +256,7 @@ parseTermNoPostfix = do
     , parseString
     , parseNum
     , parseLet
-    , parseIdentOrLambdaOrMonoid
+    , parseIdentOrLambda
     ]
   _ <- whitespace0
   return t
@@ -262,6 +265,8 @@ data Postfix = AppPostfix Pos Syntax
              | AccessPostfix Pos String
              | UpdatePostfix Pos String String Syntax
              | OperatorPostfix Pos String Syntax
+             | MonoidPostfix Pos [Syntax]
+             | ApostrophePrefix Pos Syntax
 
 parseTerm :: Parser Syntax
 parseTerm = do
@@ -270,10 +275,9 @@ parseTerm = do
     [ AppPostfix <$> position <*>
         oneOf [parseParens, parseObject] ? "a function call"
     , AccessPostfix <$> position <*>
-        (char '.' >> identString) ? "an object method"
+        (char '.' *> identString <* whitespace0) ? "an object method"
     , do
       p2 <- position
-      _ <- whitespace0
       _ <- exact "<-" ? "an object update"
       _ <- whitespace0
       w <- identString ? "an identifier"
@@ -286,11 +290,23 @@ parseTerm = do
       _ <- whitespace0
       _ <- char ':' ? ":"
       UpdatePostfix p2 self method <$> parseTerm
-    , do -- todo: pratt parsing; proper order of operations/infix levels
+    , do 
+      -- todo: pratt parsing; proper order of operations/infix levels
+      -- alternatively, wuffs(?)-style required parentheses
       p2 <- position
-      _ <- whitespace0
-      op <- oneOf [exact "+", exact "-"] ? "an operator"
+      op <- oneOf (map exact $ map (:[]) "*-+/%<>" ++ ["==","<=",">=","!="]) ? "an operator"
       OperatorPostfix p2 op <$> parseTerm
+    , do
+      p2 <- position
+      _ <- char '['
+      terms <- sepBy0 (char ',') parseTerm
+      _ <- char ']'
+      _ <- whitespace0
+      return $ MonoidPostfix p2 terms
+    , do
+      p2 <- position
+      _ <- char '\''
+      ApostrophePrefix p2 <$> parseTerm
     ]
   let out = case args of
         [] -> t
@@ -300,31 +316,44 @@ parseTerm = do
             UpdatePostfix p2 self method new ->
               UpdateSyntax p2 b self method new
             OperatorPostfix p2 op rhs -> OperatorSyntax p2 b op rhs
+            MonoidPostfix p2 terms ->
+              foldr (\term so_far->
+                  AppSyntax p2
+                      (AppSyntax p2
+                          (AccessSyntax (stxPos b) b "Has")
+                        term)
+                    so_far
+                ) (AccessSyntax (stxPos b) b "Empty") terms
+            ApostrophePrefix p2 rhs -> AppSyntax p2 b rhs
           ) t args
   _ <- whitespace0
   return out
 
-parseFuncOrObjDecl :: Parser (Either (String, Syntax) [String])
-parseFuncOrObjDecl = do
-  p <- position
-  _ <- exact "def" ? "a global declaration"
-  _ <- whitespace -- TODO: should be not(oneOf[satisfy isAlpha, satisfy isDigit, char '_'])
-  name <- identString
-  mb_obj <- possible (whitespace0 >> char '{')
-  case mb_obj of
-    Just _ -> do
-      methods <- parseMethods ? "some object methods"
-      _ <- char '}' ? "}"
-      return $ Left (name, ObjectSyntax p (Just name) methods)
-    Nothing -> do
-      params <- many (do
-          _ <- char '(' ? "("
+parseParams :: Parser [String]
+parseParams = many $ do
+          _ <- char '(' ? "parameters"
           _ <- whitespace0
           param <- patternString ? "a parameter name"
           _ <- whitespace0
           _ <- char ')' ? ")"
           return param
-        ) ? "parameters"
+
+parseDecl :: Parser (Either (String, Syntax) [String])
+parseDecl = do
+  p <- position
+  _ <- exact "def" ? "a global declaration"
+  _ <- whitespace -- TODO: should be not(oneOf[satisfy isAlpha, satisfy isDigit, char '_'])
+  name <- identString
+  mb_not_func <- possible (whitespace0 >> char ':')
+  case mb_not_func of
+    Just _ -> do
+      _ <- whitespace0
+      t <- parseTerm
+      return $ Left $ case t of
+        ObjectSyntax p2 _ methods -> (name, ObjectSyntax p2 (Just name) methods)
+        _ -> (name, t)
+    Nothing -> do
+      params <- parseParams
       _ <- whitespace0
       _ <- char ':' ? ":"
       body <- parseTerm
@@ -341,6 +370,6 @@ parseImport = do
 parseFile :: Parser (Map.Map String Syntax, [[String]])
 parseFile = do
   let parser = many $ whitespace0 *>
-        oneOf [parseFuncOrObjDecl, parseImport] ? "a declaration" <* whitespace0
+        oneOf [parseDecl, parseImport] ? "a declaration" <* whitespace0
   (decls, imports) <- fmap partitionEithers parser
   return (Map.fromList decls, imports)

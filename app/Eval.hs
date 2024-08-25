@@ -47,21 +47,8 @@ normalize t = getEIO $ do
               "`console.write` with wrong number of arguments: "
               ++ show (length stack)
         Ident p _ "#console_read" -> do
-          case stack of
-            (arg, arg_env):_ -> do
-              (normal_form, _, _) <- go arg (Stack []) arg_env
-              case normal_form of
-                Object _ _ methods | Map.null methods -> do
-                  str <- lift getLine
-                  return (String p str, s, e)
-                _ ->
-                  left $ prettyRuntimeError p $
-                  "Bad argument for `console.read`: `"
-                  ++ pretty normal_form ++ "`"
-            [] ->
-              return (Lambda p "x"
-                  (App p (Ident p 0 "#console_read") (Ident p 0 "x")),
-                s, e)
+          str <- lift getLine
+          return (String p str, s, e)
         Ident p 0 name -> do
           case env of
             (def, new_env):_ ->
