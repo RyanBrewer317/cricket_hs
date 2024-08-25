@@ -114,7 +114,7 @@ def backpassing_example_2:
   in let force _ = console.write(y)
   in return(0)
 
-def main(_):
+def main:
   let force _ = laziness_example_1 // print 1 then 2
   in let force _ = laziness_example_2 // print "b"
   in let force _ = laziness_example_3 // print 1 then 2

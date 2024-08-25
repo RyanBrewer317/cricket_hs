@@ -79,7 +79,7 @@ main = do
         Left err -> putStrLn err
         Right (_, _, t) -> do
           let t2 = translate mod_name 0 Map.empty t
-          let entry = App pos (Access pos t2 "main") (Object pos Nothing Map.empty)
+          let entry = Access pos t2 "main"
           result <- normalize entry
           case result of
             Left err -> putStrLn err
