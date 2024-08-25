@@ -4,8 +4,18 @@ Welcome to the Cricket docs!
 Cricket is a tiny language that you could make yourself, 
 but aims to still be ergonomic for programming.
 
+Here's the hello-world program in Cricket:
+```
+def main:
+  console.write("Hello, world!")
+```
+(Don't fret, Cricket doesn't care about whitespace :)
+
+
+### Functional
+
 Cricket is a functional language.
-No one can agree on what that means in practice,
+No one can agree on what that means in practice;
 it's more of a general ideology of language design than any specific rules.
 In our case, functional means two things:
 higher-order functions and no mutable state.
@@ -28,7 +38,11 @@ Here's an example of the immutability of Cricket:
 let new_object = (old_object <- p: 7) in ...
 ```
 `<- f:` is the notation for adding a field to an object,
-but notice that it returns a new object, instead of editing the old one. So `<-` is pronounced "with."
+but notice that it returns a new object, instead of editing the old one. 
+So `<-` is pronounced "with."
+
+
+### Function Calls
 
 Cricket functions always take exactly one value.
 There are three ways to implement functions of multiple arguments,
@@ -40,9 +54,9 @@ def add(args):
 
 add({p1: 7, p2: 8})
 ```
-Cricket has a special syntax for this to make it nicer:
+Cricket has a special syntax to make calls nicer:
 ```
-add{p1: 7, p2: 8}
+add{p1: 7, p2: 8} // == 15
 ```
 A benefit of this approach is that the order of parameters doesn't matter,
 and parameters are labelled at every callsite.
@@ -72,31 +86,47 @@ and requires every argument be present,
 but plays very nicely with higher-order functions,
 and has less-verbose callsites.
 
-The final option is "monoid functions."
-The details here are a bit much to go into here,
+The third and final option is "fold functions."
+The details are a bit much to go into here,
 as the scary name suggests.
 But it's essentially a variadic function:
 ```
-def sum {
-  Has: a-> accumulator-> a + accumulator,
-  Empty: 0
-}
-
 sum[1, 2, 3]
 ```
-Monoid functions are only useful when 
-what you're looking for is essentially a reduce on a hand-written list.
-I added monoid functions to Cricket
+But defined as a fold:
+```
+def sum: {
+  Has(a)(accumulator): 
+    a + accumulator, // new accumulator
+  Empty: 0
+}
+```
+Fold functions are only useful when 
+what you're looking for is essentially a reduce ("fold") on a hand-written list.
+I added fold functions to Cricket
 because I believe they have a high power-to-weight ratio;
 the parser just replaces the callsite above with
 ```
 sum.Has(1)(sum.Has(2)(sum.Has(3)(sum.Empty)))
 ```
 and processing and execution continue from there.
-However, they unlock things like `list["A", "B", "C", "D"]` 
-or `div[text("Hi, "), bold("world"), text("!")]`.
+But even with that simplicity,
+they unlock syntax like `list["A", "B", "C", "D"]` 
+or `div[class("my-class")]["Hello, ", strong[]["world"], "!"]`.
 As you can tell, Cricket uses syntax sugar in a few key places to make it more ergonomic.
-Otherwise Cricket would be another "Turing Tarpit"-style esolang:
+Otherwise it would be another "Turing Tarpit:"
 everything *could* be done with its lambdas and objects, 
 but it would be very painful to do so.
 We will see still more examples of this syntax sugar to come.
+
+
+### Next Steps
+
+There are a few directions you can go in your Cricket journey.
+
+If you want to learn how to write useful Cricket programs,
+I still have more guides to write,
+but you can see lots of example code in [main.ct](/main.ct).
+
+If you're excited about the programming language theory, 
+check out [theory.md](/docs/theory.md).
